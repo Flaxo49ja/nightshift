@@ -1,0 +1,107 @@
+"""Normalization is the riskiest code in the slice: a silent field mistake
+poisons every rule built on top. Each raw fixture is compared whole against a
+reviewed golden file, the way PhishGuard pins model output.
+"""
+import json
+import unittest
+from pathlib import Path
+
+from nightshift.providers.journald import JournaldProvider, classify
+
+ROOT = Path(__file__).resolve().parent.parent
+FIXTURES = ROOT / "fixtures"
+
+GOLDEN_PAIRS = [
+    ("auth_failed_su_burst.jsonl", "auth_failed_su_burst.expected.jsonl"),
+    ("sudo_commands.jsonl", "sudo_commands.expected.jsonl"),
+    ("systemd_units.jsonl", "systemd_units.expected.jsonl"),
+    ("cron_and_logind.jsonl", "cron_and_logind.expected.jsonl"),
+]
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+class GoldenNormalizationTest(unittest.TestCase):
+    def test_each_fixture_normalizes_to_its_golden_file(self):
+        provider = JournaldProvider(runner=lambda **_: [])
+        for raw_name, golden_name in GOLDEN_PAIRS:
+            with self.subTest(fixture=raw_name):
+                raw = read_jsonl(FIXTURES / raw_name)
+                expected = read_jsonl(FIXTURES / "expected" / golden_name)
+                actual = [provider.normalize(entry).to_dict() for entry in raw]
+                self.assertEqual(actual, expected)
+
+
+class ClassificationTest(unittest.TestCase):
+    def test_unknown_identifier_stays_unknown(self):
+        self.assertEqual(classify("ABDownloadManager", "downloading", None), "unknown")
+
+    def test_sudo_list_is_a_sudo_command_after_the_failure_check(self):
+        message = "    alice : TTY=pts/2 ; PWD=/home/alice ; USER=root ; COMMAND=list"
+        self.assertEqual(classify("sudo", message, None), "sudo_command")
+
+    def test_sudo_failure_wins_over_the_command_field(self):
+        message = "    alice : a password is required ; USER=root ; COMMAND=/usr/bin/id"
+        self.assertEqual(classify("sudo", message, None), "auth_failure")
+
+    def test_user_timer_start_is_a_timer_run_not_a_service_start(self):
+        self.assertEqual(classify("systemd", "Started ns7f3a2c.timer.", "ns7f3a2c.timer"), "timer_run")
+
+    def test_unit_failure_is_service_failed(self):
+        message = "demo.service: Main process exited, code=exited, status=1/FAILURE"
+        self.assertEqual(classify("systemd", message, "demo.service"), "service_failed")
+
+
+class FieldExtractionTest(unittest.TestCase):
+    def setUp(self):
+        self.provider = JournaldProvider(runner=lambda **_: [])
+
+    def entry(self, **overrides):
+        base = {
+            "__CURSOR": "s=x;i=1", "__REALTIME_TIMESTAMP": "1793390651000000",
+            "_HOSTNAME": "soc-lab", "SYSLOG_IDENTIFIER": "sudo",
+            "MESSAGE": "    alice : TTY=pts/2 ; USER=root ; COMMAND=list",
+            "PRIORITY": "6", "_PID": "42", "_COMM": "sudo",
+        }
+        base.update(overrides)
+        return base
+
+    def test_missing_cursor_or_timestamp_is_dropped_not_guessed(self):
+        self.assertIsNone(self.provider.normalize(self.entry(__CURSOR=None)))
+        self.assertIsNone(self.provider.normalize(self.entry(__REALTIME_TIMESTAMP="nope")))
+
+    def test_binary_message_is_decoded_instead_of_crashing(self):
+        raw = self.entry(MESSAGE=[72, 105])
+        self.assertEqual(self.provider.normalize(raw).message, "Hi")
+
+    def test_absent_optional_fields_are_none(self):
+        event = self.provider.normalize(self.entry(_PID=None, PRIORITY=None, _HOSTNAME=None))
+        self.assertIsNone(event.pid)
+        self.assertIsNone(event.priority)
+        self.assertEqual(event.host, "unknown")
+
+    def test_ssh_network_fields_are_parsed(self):
+        message = "Failed password for invalid user admin from 198.51.100.7 port 51515 ssh2"
+        event = self.provider.normalize(self.entry(SYSLOG_IDENTIFIER="sshd", MESSAGE=message))
+        self.assertEqual((event.src_ip, event.src_port), ("198.51.100.7", 51515))
+        self.assertEqual(event.user, "admin")
+
+    def test_a_sentence_period_is_not_part_of_the_username(self):
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd-logind", MESSAGE="New session 42 of user alice.")
+        self.assertEqual(self.provider.normalize(raw).user, "alice")
+
+    def test_source_falls_back_to_comm(self):
+        self.assertEqual(self.provider.source_of({"SYSLOG_IDENTIFIER": "sudo"}), "sudo")
+        self.assertEqual(self.provider.source_of({"_COMM": "su"}), "su")
+        self.assertEqual(self.provider.source_of({}), "unknown")
+
+    def test_same_entry_always_gets_the_same_id(self):
+        first = self.provider.normalize(self.entry())
+        second = self.provider.normalize(self.entry())
+        self.assertEqual(first.id, second.id)
+
+
+if __name__ == "__main__":
+    unittest.main()
