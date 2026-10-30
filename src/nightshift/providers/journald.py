@@ -18,7 +18,8 @@ from ..schema import Event, event_id, rfc3339_utc
 DEFAULT_SOURCES = frozenset({
     "sudo", "su", "sshd", "systemd", "systemd-logind", "systemd-user-sessions",
     "polkitd", "pkexec", "useradd", "usermod", "userdel", "passwd",
-    "CRON", "crond", "sddm", "gdm", "lightdm", "greetd", "login", "kernel",
+    "CRON", "crond", "sddm", "gdm", "lightdm", "greetd", "ly", "ly-dm",
+    "unix_chkpwd", "login", "kernel",
 })
 
 _USER_PATTERNS = {
