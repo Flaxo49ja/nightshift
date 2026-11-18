@@ -80,6 +80,25 @@ class LoadingTest(unittest.TestCase):
         with self.assertRaises(RuleError):
             rule(count_gte=2, within="5m", group_by="not_a_field")
 
+    def test_boolean_value_is_rejected_not_silently_never_matching(self):
+        # bool is a subclass of int: without an explicit check this loads and
+        # then compares an event field against True forever.
+        with self.assertRaises(RuleError):
+            rule(when={"user": True})
+
+    def test_title_must_be_a_non_empty_string(self):
+        with self.assertRaises(RuleError):
+            rule(title=123)
+
+    def test_false_positives_must_be_a_list_of_strings(self):
+        # A bare string would become a tuple of characters.
+        with self.assertRaises(RuleError):
+            rule(false_positives="mistyped")
+
+    def test_malformed_technique_is_rejected(self):
+        with self.assertRaises(RuleError):
+            rule(technique="T1110.01")
+
     def test_duplicate_ids_across_files_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             for name in ("a.json", "b.json"):

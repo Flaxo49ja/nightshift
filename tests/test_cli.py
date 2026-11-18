@@ -5,12 +5,12 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from nightshift.cli import collect, parse_since
+from nightshift.cli import collect, parse_since, shift
 from nightshift.providers.base import CursorInvalid
 from nightshift.providers.journald import JournaldProvider
 
@@ -126,6 +126,18 @@ class CollectTest(unittest.TestCase):
         code, out = self.run_collect(FakeProvider([]))
         self.assertEqual(code, 0)
         self.assertIn("0 new events", out)
+
+
+class ShiftNoteTest(unittest.TestCase):
+    def test_note_without_a_decision_is_refused_not_silently_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = SimpleNamespace(state_dir=Path(tmp), all=False,
+                                   confirm=None, dismiss=None, note="looks benign")
+            err = io.StringIO()
+            with redirect_stderr(err):
+                code = shift(args)
+        self.assertEqual(code, 2)
+        self.assertIn("--note needs", err.getvalue())
 
 
 class ParseSinceTest(unittest.TestCase):

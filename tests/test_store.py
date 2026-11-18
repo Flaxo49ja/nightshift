@@ -46,6 +46,13 @@ class EventStoreTest(unittest.TestCase):
         self.assertEqual(written, 1)
         self.assertEqual([json.loads(l)["id"] for l in self.path.read_text().splitlines()], ["a", "b"])
 
+    def test_torn_line_is_skipped_rather_than_stopping_collection(self):
+        # A crash mid-write leaves half a line; the next run must still collect.
+        self.path.parent.mkdir(parents=True)
+        self.path.write_text(json.dumps(event("a").to_dict()) + "\n" + '{"id": "tor')
+        self.assertEqual(self.store.existing_ids(), {"a"})
+        self.assertEqual(self.store.append_new([event("b")]), 1)
+
     def test_append_new_writes_nothing_when_all_known(self):
         self.store.append([event("a")])
         before = self.path.read_text()

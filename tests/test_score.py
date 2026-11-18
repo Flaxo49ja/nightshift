@@ -97,6 +97,13 @@ class PrecisionTest(unittest.TestCase):
         self.assertEqual([d["id"] for d in card.false_positives], ["noise"])
         self.assertIn("false positives:", render(card))
 
+    def test_no_detections_reports_undefined_precision_not_zero(self):
+        # "0% precision, 0 false positives" contradicted itself: nothing was
+        # predicted, so precision was never measured.
+        card = score([truth("T1110.001")], [])
+        self.assertIsNone(card.precision)
+        self.assertIn("precision  n/a", render(card))
+
     def test_false_positive_list_is_truncated_but_counted(self):
         noise = [detection("T1105", ident=f"n{i}", rule="x") for i in range(12)]
         text = render(score([truth("T1110.001")], noise))

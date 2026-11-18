@@ -142,8 +142,13 @@ def render(card: Scorecard, provider: str = "journald") -> str:
     if scored:
         lines.append(f"  recall     {(card.recall or 0):.0%}  ({card.true_positives} caught, "
                      f"{card.false_negatives} missed, {len(scored)} scored technique(s))")
-        lines.append(f"  precision  {(card.precision or 0):.0%}  "
-                     f"({len(card.false_positives)} false positive(s))")
+        # Precision is undefined when nothing was predicted. "0%" with zero
+        # false positives reads as a failure where the truth is "not measured".
+        if card.precision is None:
+            lines.append("  precision  n/a  (no detections at all)")
+        else:
+            lines.append(f"  precision  {card.precision:.0%}  "
+                         f"({len(card.false_positives)} false positive(s))")
     else:
         lines.append("  nothing was scored: no injected technique produced observable telemetry")
 

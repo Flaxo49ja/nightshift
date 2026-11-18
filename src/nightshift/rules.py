@@ -16,6 +16,7 @@ every one of them is a place to hide a bug.
 """
 import hashlib
 import json
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -82,11 +83,18 @@ def _check_when(when, rule_id: str) -> dict:
             if not isinstance(value, str) or not value:
                 raise RuleError(f"{rule_id}: {key} must be a non-empty string")
         elif key == "priority":
-            if not isinstance(value, (int, list)):
+            if isinstance(value, bool) or not isinstance(value, (int, list)):
                 raise RuleError(f"{rule_id}: priority must be an int or a list of ints")
         else:
+            # `bool` is an `int` in Python: true/false would load and then
+            # never equal an event field, which is the silent failure this
+            # validation exists to stop.
+            if isinstance(value, bool):
+                raise RuleError(f"{rule_id}: {key} must be a string, int or list, not a boolean")
             if isinstance(value, list) and not value:
                 raise RuleError(f"{rule_id}: {key} list must not be empty")
+            if isinstance(value, list) and any(isinstance(v, bool) for v in value):
+                raise RuleError(f"{rule_id}: {key} list must not contain booleans")
             if not isinstance(value, (str, int, list)):
                 raise RuleError(f"{rule_id}: {key} must be a string, int or list")
     return dict(when)
@@ -105,9 +113,22 @@ def load_rule(data: dict) -> Rule:
     rule_id = data["id"]
     if not isinstance(rule_id, str) or not rule_id:
         raise RuleError("rule id must be a non-empty string")
+    title = data["title"]
+    if not isinstance(title, str) or not title.strip():
+        raise RuleError(f"{rule_id}: title must be a non-empty string")
     severity = data["severity"]
     if severity not in SEVERITIES:
         raise RuleError(f"{rule_id}: severity must be one of {', '.join(SEVERITIES)}")
+    why = data.get("why", "")
+    if not isinstance(why, str):
+        raise RuleError(f"{rule_id}: why must be a string")
+    false_positives = data.get("false_positives", ())
+    # A bare string here would become a tuple of characters, which is worse
+    # than an error because it renders almost plausibly.
+    if isinstance(false_positives, str) or not isinstance(false_positives, (list, tuple)):
+        raise RuleError(f"{rule_id}: false_positives must be a list of strings")
+    if any(not isinstance(item, str) for item in false_positives):
+        raise RuleError(f"{rule_id}: false_positives must be a list of strings")
 
     count_gte = data.get("count_gte", 1)
     if not isinstance(count_gte, int) or count_gte < 1:
@@ -124,20 +145,29 @@ def load_rule(data: dict) -> Rule:
         raise RuleError(f"{rule_id}: group_by must be an event field, got {group_by!r}")
 
     technique = data.get("technique")
-    if technique is not None and not isinstance(technique, str):
-        raise RuleError(f"{rule_id}: technique must be a string like T1110.001")
+    if technique is not None:
+        if not isinstance(technique, str):
+            raise RuleError(f"{rule_id}: technique must be a string like T1110.001")
+        # Not every valid id is in the coverage matrix (that is a curated
+        # subset), but a malformed one is a typo that would leave the rule
+        # out of every ATT&CK view without anyone noticing.
+        if not re.fullmatch(r"T\d{4}(\.\d{3})?", technique):
+            raise RuleError(
+                f"{rule_id}: technique {technique!r} is not an ATT&CK id "
+                f"(expected T1234 or T1234.567)"
+            )
 
     return Rule(
         id=rule_id,
-        title=data["title"],
+        title=title,
         severity=severity,
         when=_check_when(data["when"], rule_id),
         technique=technique,
         group_by=group_by,
         count_gte=count_gte,
         within=parse_duration(within) if within else None,
-        why=data.get("why", ""),
-        false_positives=tuple(data.get("false_positives", ())),
+        why=why,
+        false_positives=tuple(false_positives),
     )
 
 

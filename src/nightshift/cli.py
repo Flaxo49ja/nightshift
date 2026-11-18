@@ -221,6 +221,12 @@ def shift(args) -> int:
     queue = TriageQueue(state_dir / "queue.json")
     rows = queue.entries(detections)
 
+    # A note belongs to a decision. Accepting one on its own would print the
+    # queue and exit 0 while recording nothing, which reads like success.
+    if args.note and not (args.confirm or args.dismiss):
+        print("error: --note needs --confirm ID or --dismiss ID", file=sys.stderr)
+        return 2
+
     for action in ("confirm", "dismiss"):
         target = getattr(args, action, None)
         if not target:

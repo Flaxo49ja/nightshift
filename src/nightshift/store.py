@@ -5,6 +5,7 @@ JSONL keeps the record greppable with the tools an analyst already uses
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 from .schema import Event
@@ -14,12 +15,14 @@ def read_jsonl(path: Path) -> list[dict]:
     """Read a JSONL file, skipping blank and unparseable lines.
 
     A truncated final line is normal after a crash, so one bad line must not
-    discard a whole shift's telemetry.
+    discard a whole shift's telemetry. It is still telemetry lost, though, so
+    say how much on stderr rather than letting the count quietly shrink.
     """
     path = Path(path)
     if not path.exists():
         return []
     rows = []
+    bad = 0
     with path.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -28,7 +31,9 @@ def read_jsonl(path: Path) -> list[dict]:
             try:
                 rows.append(json.loads(line))
             except json.JSONDecodeError:
-                continue
+                bad += 1
+    if bad:
+        print(f"warning: {path}: skipped {bad} unreadable line(s)", file=sys.stderr)
     return rows
 
 
@@ -55,14 +60,25 @@ class EventStore:
         self.path = path
 
     def existing_ids(self) -> set[str]:
+        """Ids already stored. A torn final line must not stop collection."""
         if not self.path.exists():
             return set()
         ids = set()
+        bad = 0
         with self.path.open(encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
-                if line:
-                    ids.add(json.loads(line)["id"])
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    bad += 1
+                    continue
+                if isinstance(row, dict) and "id" in row:
+                    ids.add(row["id"])
+        if bad:
+            print(f"warning: {self.path}: skipped {bad} unreadable line(s)", file=sys.stderr)
         return ids
 
     def append(self, events) -> int:
