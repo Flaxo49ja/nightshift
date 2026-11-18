@@ -1,0 +1,16 @@
+{
+  "id": "firewall-block-burst",
+  "title": "Repeated inbound firewall blocks from one source",
+  "severity": "medium",
+  "technique": "T1595.002",
+  "why": "One blocked packet is a misdirected application; forty from the same address inside ten minutes is a scan. Counted per source address, so a chatty LAN device cannot hide a scanner inside its own noise: the noisiest legitimate source on this host peaked at 28 blocks per ten minutes, which is why the threshold sits above it.",
+  "false_positives": [
+    "a LAN device with a retry loop or a broken service-discovery daemon",
+    "your own vulnerability scanner run from another host",
+    "NAT collapsing several machines behind one source address"
+  ],
+  "when": { "event_type": "firewall_block" },
+  "group_by": "src_ip",
+  "count_gte": 40,
+  "within": "10m"
+}

@@ -17,6 +17,7 @@ _EVIDENCE = {
     "T1046": "process_exec",
     "T1136.001": "account_change",
     "T1078.003": "session_open",
+    "T1595.002": "firewall_block",
 }
 
 _PROVIDERS = ("journald", "auditd")
@@ -30,6 +31,7 @@ _NAMES = {
     "T1046": "Network Service Discovery",
     "T1136.001": "Local Account Creation",
     "T1078.003": "Valid Accounts: Local Accounts",
+    "T1595.002": "Vulnerability Scanning",
 }
 
 

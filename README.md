@@ -94,7 +94,8 @@ the journal does not carry the value.
 
 Event types: `auth_success`, `auth_failure`, `sudo_command`, `session_open`,
 `session_close`, `service_start`, `service_stop`, `service_failed`,
-`timer_run`, `cron_run`, `account_change`, `process_exec`, `unknown`.
+`timer_run`, `cron_run`, `account_change`, `process_exec`, `firewall_block`,
+`unknown`.
 
 There is deliberately no copy of the raw journal record: the journal is the
 archive, and `id` can seek back to it.
@@ -235,16 +236,19 @@ hostname, username or address appears in them.
 python3 -m unittest discover -s tests -v
 ```
 
-160 tests, no network, no journal access, no system changes. They cover the
+174 tests, no network, no journal access, no system changes. They cover the
 schema contract, cursor gaps, rule validation and burst windows, the triage
 queue, injector safety (loopback only, cleanup, blind file mode), the
 scorecard's honesty rules, and one end-to-end shift over the fixtures.
 
 ## Honest limits
 
-- On a quiet window the allowlist yields almost nothing: this machine logged 34
-  firewall blocks in 45 minutes and no auth events. That is a real lesson about
-  baselines, and it is why the injector exists.
+- On a quiet window the allowlist yields little: a real two-day shift here
+  produced 275 inbound firewall blocks and no authentication events. The blocks
+  are typed as `firewall_block` now, but a LAN's multicast chatter stays below
+  the scan threshold — that is a baseline, not an alert.
+- journald sees the packets the firewall rejected, not the scanner's process, so
+  `firewall_block` maps to T1595.002 while T1046 remains a blind spot.
 - `/var/log/audit/audit.log` is root-only on a default install. Without sudo the
   auditd provider says so instead of reporting a clean zero; use `--file` with a
   fixture to work offline.

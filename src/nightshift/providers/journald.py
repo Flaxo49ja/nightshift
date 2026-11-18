@@ -33,6 +33,12 @@ _USER_PATTERNS = {
     "polkitd": re.compile(r"unix-user:([\w.@-]+)"),
 }
 
+# UFW writes blocks as kernel lines: `[UFW BLOCK] IN=wlan0 OUT= ... SRC=... SPT=...`.
+# `[UFW LIMIT BLOCK]` is the same verdict after rate limiting.
+_UFW_BLOCK = re.compile(r"\[UFW (?:LIMIT )?BLOCK\]")
+_UFW_SRC = re.compile(r"\bSRC=([0-9A-Fa-f:.]+)")
+_UFW_SPT = re.compile(r"\bSPT=(\d+)")
+
 _NETWORK = re.compile(r"from ((?:\d{1,3}\.){3}\d{1,3}) port (\d+)")
 
 # systemd's own manager logs every line from `init.scope`, so for those entries
@@ -165,6 +171,10 @@ def classify(source: str, message: str, unit: str | None) -> str:
     if source in {"CRON", "crond"}:
         return "cron_run"
 
+    if source == "kernel" and _UFW_BLOCK.search(message):
+        # The firewall already decided; this is the decision, not the packet.
+        return "firewall_block"
+
     if source == "systemd":
         if unit and unit.endswith(".timer") and "started" in text:
             return "timer_run"
@@ -206,9 +216,14 @@ def _unit(raw: dict, message: str) -> str | None:
 
 def _network(message: str) -> tuple[str | None, int | None]:
     match = _NETWORK.search(message)
-    if not match:
+    if match:
+        return match.group(1), int(match.group(2))
+    # UFW spells its own fields; the source is the only peer it records.
+    src = _UFW_SRC.search(message)
+    if not src:
         return None, None
-    return match.group(1), int(match.group(2))
+    port = _UFW_SPT.search(message)
+    return src.group(1), int(port.group(1)) if port else None
 
 
 def _int_or_none(value) -> int | None:

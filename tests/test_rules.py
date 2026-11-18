@@ -3,6 +3,7 @@ a detection that silently never fires."""
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from nightshift.rules import (RuleError, detection_id, evaluate, load_rule,
@@ -201,6 +202,36 @@ class EvaluateTest(unittest.TestCase):
         detection = evaluate(events, [burst])[0]
         self.assertEqual(detection["technique"], "T1110.001")
         self.assertEqual(detection["event_ids"], ["a", "b"])
+
+
+class FirewallBlockRuleTest(unittest.TestCase):
+    """The shipped rule is data, so its threshold is worth pinning."""
+
+    @classmethod
+    def setUpClass(cls):
+        rules_dir = Path(__file__).resolve().parents[1] / "rules"
+        cls.rule = next(r for r in load_rules(rules_dir) if r.id == "firewall-block-burst")
+
+    def blocks(self, count, src="203.0.113.44"):
+        start = datetime(2026, 10, 30, 20, 0, tzinfo=timezone.utc)
+        return [event(f"b{src}-{i}", (start + timedelta(seconds=5 * i)).isoformat()
+                      .replace("+00:00", "Z"),
+                      event_type="firewall_block", source="kernel", src_ip=src)
+                for i in range(count)]
+
+    def test_a_scan_against_one_address_is_one_alert(self):
+        detections = evaluate(self.blocks(40), [self.rule])
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0]["count"], 40)
+        self.assertEqual(detections[0]["technique"], "T1595.002")
+        self.assertEqual(detections[0]["key"], "203.0.113.44")
+
+    def test_just_under_the_threshold_stays_quiet(self):
+        self.assertEqual(evaluate(self.blocks(39), [self.rule]), [])
+
+    def test_two_quiet_sources_are_not_added_together(self):
+        events = self.blocks(20, "198.51.100.7") + self.blocks(20, "203.0.113.9")
+        self.assertEqual(evaluate(events, [self.rule]), [])
 
 
 if __name__ == "__main__":

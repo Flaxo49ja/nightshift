@@ -13,6 +13,9 @@ Technique choices (sub-techniques, because they describe the actual behaviour):
 - T1053.006 Systemd Timers — the throwaway user timer.
 - T1105 Ingress Tool Transfer — `curl` from the loopback mock server.
 - T1046 Network Service Discovery — `nmap` against loopback.
+- T1595.002 Vulnerability Scanning — the other side of T1046: probes arriving
+  from the network, which journald sees because ufw logs each block. No
+  injector simulation exists for it yet; the rule reads real firewall lines.
 """
 COVERAGE: dict[str, dict[str, str]] = {
     "T1110.001": {"journald": "observed"},
@@ -24,6 +27,7 @@ COVERAGE: dict[str, dict[str, str]] = {
     # Added with the account-change and root-session rules in slice 2.
     "T1136.001": {"journald": "observed", "auditd": "observed"},
     "T1078.003": {"journald": "observed"},
+    "T1595.002": {"journald": "observed"},
 }
 
 # event_types that only ever exist in fixtures on this machine. They must never

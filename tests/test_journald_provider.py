@@ -16,6 +16,7 @@ GOLDEN_PAIRS = [
     ("sudo_commands.jsonl", "sudo_commands.expected.jsonl"),
     ("systemd_units.jsonl", "systemd_units.expected.jsonl"),
     ("cron_and_logind.jsonl", "cron_and_logind.expected.jsonl"),
+    ("firewall_blocks.jsonl", "firewall_blocks.expected.jsonl"),
 ]
 
 
@@ -52,6 +53,20 @@ class ClassificationTest(unittest.TestCase):
     def test_unit_failure_is_service_failed(self):
         message = "demo.service: Main process exited, code=exited, status=1/FAILURE"
         self.assertEqual(classify("systemd", message, "demo.service"), "service_failed")
+
+    def test_ufw_block_from_the_kernel_is_a_firewall_block(self):
+        message = "[UFW BLOCK] IN=wlan0 OUT= MAC= SRC=192.168.0.112 DST=224.0.0.252 PROTO=UDP"
+        self.assertEqual(classify("kernel", message, None), "firewall_block")
+
+    def test_rate_limited_block_is_the_same_verdict(self):
+        message = "[UFW LIMIT BLOCK] IN=wlan0 OUT= SRC=203.0.113.45 PROTO=TCP"
+        self.assertEqual(classify("kernel", message, None), "firewall_block")
+
+    def test_ordinary_kernel_noise_stays_unknown(self):
+        self.assertEqual(classify("kernel", "wlan0: associated with ap", None), "unknown")
+
+    def test_ufw_text_from_another_source_is_not_a_firewall_block(self):
+        self.assertEqual(classify("systemd", "[UFW BLOCK] not really", None), "unknown")
 
 
 class FieldExtractionTest(unittest.TestCase):
@@ -121,6 +136,18 @@ class FieldExtractionTest(unittest.TestCase):
         raw = self.entry(SYSLOG_IDENTIFIER="systemd", MESSAGE="Started Steam.",
                          _SYSTEMD_UNIT="init.scope")
         self.assertEqual(self.provider.normalize(raw).unit, "init.scope")
+
+    def test_firewall_block_peer_is_parsed_from_ufw_fields(self):
+        message = ("[UFW BLOCK] IN=wlan0 OUT= MAC= SRC=203.0.113.44 DST=192.168.0.10 "
+                   "PROTO=TCP SPT=40221 DPT=22")
+        event = self.provider.normalize(self.entry(SYSLOG_IDENTIFIER="kernel", MESSAGE=message))
+        self.assertEqual((event.src_ip, event.src_port), ("203.0.113.44", 40221))
+
+    def test_ipv6_peer_survives_intact(self):
+        message = "[UFW BLOCK] IN=wlan0 OUT= SRC=fe80:0000:0000:0000:cb2b:404a:6dd0:8f6c PROTO=UDP SPT=5353"
+        event = self.provider.normalize(self.entry(SYSLOG_IDENTIFIER="kernel", MESSAGE=message))
+        self.assertEqual(event.src_ip, "fe80:0000:0000:0000:cb2b:404a:6dd0:8f6c")
+        self.assertEqual(event.src_port, 5353)
 
     def test_source_falls_back_to_comm(self):
         self.assertEqual(self.provider.source_of({"SYSLOG_IDENTIFIER": "sudo"}), "sudo")
