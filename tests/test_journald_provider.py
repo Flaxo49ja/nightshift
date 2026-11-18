@@ -92,6 +92,36 @@ class FieldExtractionTest(unittest.TestCase):
         raw = self.entry(SYSLOG_IDENTIFIER="systemd-logind", MESSAGE="New session 42 of user alice.")
         self.assertEqual(self.provider.normalize(raw).user, "alice")
 
+    def test_quoted_logind_username_is_not_dropped(self):
+        message = "New session '1' of user 'anayo' with class 'manager' and type 'unspecified'."
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd-logind", MESSAGE=message)
+        self.assertEqual(self.provider.normalize(raw).user, "anayo")
+
+    def test_manager_lines_take_the_unit_named_in_the_message(self):
+        message = "crowdsec-firewall-bouncer.service: Failed with result 'exit-code'."
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd", MESSAGE=message,
+                         _SYSTEMD_UNIT="init.scope")
+        event = self.provider.normalize(raw)
+        self.assertEqual(event.unit, "crowdsec-firewall-bouncer.service")
+        self.assertEqual(event.event_type, "service_failed")
+
+    def test_transient_unit_name_is_recovered_from_the_prefix(self):
+        message = "dbus-:1.1-org.kde.kwalletd6@11.service: Failed with result 'exit-code'."
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd", MESSAGE=message,
+                         _SYSTEMD_UNIT="init.scope")
+        self.assertEqual(self.provider.normalize(raw).unit,
+                         "dbus-:1.1-org.kde.kwalletd6@11.service")
+
+    def test_a_real_unit_is_not_overridden_by_the_message(self):
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd", MESSAGE="demo.service: failed",
+                         _SYSTEMD_UNIT="other.service")
+        self.assertEqual(self.provider.normalize(raw).unit, "other.service")
+
+    def test_manager_line_without_a_unit_keeps_its_placeholder(self):
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd", MESSAGE="Started Steam.",
+                         _SYSTEMD_UNIT="init.scope")
+        self.assertEqual(self.provider.normalize(raw).unit, "init.scope")
+
     def test_source_falls_back_to_comm(self):
         self.assertEqual(self.provider.source_of({"SYSLOG_IDENTIFIER": "sudo"}), "sudo")
         self.assertEqual(self.provider.source_of({"_COMM": "su"}), "su")

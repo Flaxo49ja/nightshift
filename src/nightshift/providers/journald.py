@@ -26,13 +26,23 @@ _USER_PATTERNS = {
     "sudo": re.compile(r"^\s*([\w.@-]+)\s*:"),
     "su": re.compile(r" by ([\w.@-]+)"),
     "sshd": re.compile(r"for (?:invalid user )?([\w.@-]+) from"),
-    "systemd-logind": re.compile(r"of user ([\w.@-]+)"),
+    # logind quotes the name on this machine: "New session '1' of user 'alice'".
+    "systemd-logind": re.compile(r"of user '?([\w.@-]+)'?"),
     "CRON": re.compile(r"^\(([\w.@-]+)\) CMD"),
     "useradd": re.compile(r"name=([\w.@-]+)"),
     "polkitd": re.compile(r"unix-user:([\w.@-]+)"),
 }
 
 _NETWORK = re.compile(r"from ((?:\d{1,3}\.){3}\d{1,3}) port (\d+)")
+
+# systemd's own manager logs every line from `init.scope`, so for those entries
+# the owning unit is only named at the start of the message:
+#   "crowdsec-firewall-bouncer.service: Failed with result 'exit-code'."
+_MANAGER_UNIT = "init.scope"
+_UNIT_PREFIX = re.compile(
+    r"^([A-Za-z0-9][\w@:.\-]*\."
+    r"(?:automount|device|mount|path|scope|service|slice|socket|swap|target|timer)):"
+)
 
 
 def run_journalctl(after_cursor: str | None, since: datetime | None) -> list[dict]:
@@ -87,7 +97,7 @@ class JournaldProvider:
             return None
         message = _message(raw)
         source = self.source_of(raw)
-        unit = raw.get("_SYSTEMD_USER_UNIT") or raw.get("_SYSTEMD_UNIT")
+        unit = _unit(raw, message)
         src_ip, src_port = _network(message)
         return Event(
             id=event_id(self.name, cursor),
@@ -183,6 +193,15 @@ def _user(source: str, message: str) -> str | None:
     match = pattern.search(message)
     # usernames never end in a full stop; "of user alice." is a sentence, not a name
     return match.group(1).rstrip(".") if match else None
+
+
+def _unit(raw: dict, message: str) -> str | None:
+    """The unit that owns this entry, or the one the manager names in the line."""
+    unit = raw.get("_SYSTEMD_UNIT") or raw.get("_SYSTEMD_USER_UNIT")
+    if unit and unit != _MANAGER_UNIT:
+        return unit
+    match = _UNIT_PREFIX.match(message)
+    return match.group(1) if match else unit
 
 
 def _network(message: str) -> tuple[str | None, int | None]:
