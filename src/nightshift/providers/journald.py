@@ -62,6 +62,9 @@ def run_journalctl(after_cursor: str | None, since: datetime | None) -> list[dic
 
 class JournaldProvider:
     name = "journald"
+    # The collector drops non-security identifiers unless `--all` is given.
+    # auditd sets this to None: every record there is security relevant.
+    allowlist = DEFAULT_SOURCES
 
     def __init__(self, runner=run_journalctl):
         self._runner = runner

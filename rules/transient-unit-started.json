@@ -1,0 +1,12 @@
+{
+  "id": "transient-unit-started",
+  "title": "Transient systemd unit started",
+  "severity": "medium",
+  "technique": "T1053.006",
+  "why": "systemd-run leaves no unit file, so a transient unit is the scheduler equivalent of running from memory. journald prefixes the description with [systemd-run].",
+  "false_positives": [
+    "the same automation a user normally runs",
+    "a desktop app spawning ephemeral work"
+  ],
+  "when": { "event_type": "service_start", "message_contains": "[systemd-run]" }
+}

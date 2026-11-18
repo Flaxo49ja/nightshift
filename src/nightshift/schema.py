@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 EVENT_TYPES = frozenset({
     "auth_success", "auth_failure", "sudo_command", "session_open",
     "session_close", "service_start", "service_stop", "service_failed",
-    "timer_run", "cron_run", "account_change", "unknown",
+    "timer_run", "cron_run", "account_change", "process_exec", "unknown",
 })
 
 

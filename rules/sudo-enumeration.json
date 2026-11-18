@@ -1,0 +1,12 @@
+{
+  "id": "sudo-enumeration",
+  "title": "Sudo privilege enumeration",
+  "severity": "medium",
+  "technique": "T1548.003",
+  "why": "`sudo -l` asks what you are allowed to do before you do it. On a workstation that is reconnaissance, not administration.",
+  "false_positives": [
+    "an administrator checking their own privileges",
+    "a provisioning script that lists sudo rights"
+  ],
+  "when": { "event_type": "sudo_command", "message_contains": "command=list" }
+}

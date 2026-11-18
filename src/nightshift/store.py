@@ -10,6 +10,46 @@ from pathlib import Path
 from .schema import Event
 
 
+def read_jsonl(path: Path) -> list[dict]:
+    """Read a JSONL file, skipping blank and unparseable lines.
+
+    A truncated final line is normal after a crash, so one bad line must not
+    discard a whole shift's telemetry.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def append_jsonl(path: Path, rows, key: str = "id") -> int:
+    """Append rows whose `key` is not already present. Returns the count written."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    known = {row.get(key) for row in read_jsonl(path)}
+    written = 0
+    with path.open("a", encoding="utf-8") as fh:
+        for row in rows:
+            if row.get(key) in known:
+                continue
+            known.add(row.get(key))
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            written += 1
+        fh.flush()
+        os.fsync(fh.fileno())
+    return written
+
+
 class EventStore:
     def __init__(self, path: Path):
         self.path = path

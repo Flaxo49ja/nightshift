@@ -16,10 +16,14 @@ Technique choices (sub-techniques, because they describe the actual behaviour):
 """
 COVERAGE: dict[str, dict[str, str]] = {
     "T1110.001": {"journald": "observed"},
-    "T1548.003": {"journald": "observed"},
-    "T1053.006": {"journald": "observed"},
-    "T1105": {"journald": "no-telemetry"},
-    "T1046": {"journald": "no-telemetry"},
+    "T1548.003": {"journald": "observed", "auditd": "observed"},
+    "T1053.006": {"journald": "observed", "auditd": "observed"},
+    # The pair auditd exists for: journald sees service output, not execve.
+    "T1105": {"journald": "no-telemetry", "auditd": "observed"},
+    "T1046": {"journald": "no-telemetry", "auditd": "observed"},
+    # Added with the account-change and root-session rules in slice 2.
+    "T1136.001": {"journald": "observed", "auditd": "observed"},
+    "T1078.003": {"journald": "observed"},
 }
 
 # event_types that only ever exist in fixtures on this machine. They must never
@@ -34,3 +38,12 @@ def visibility(technique: str, provider: str = "journald") -> str:
 
 def is_real_coverage(event_type: str) -> bool:
     return event_type not in FIXTURE_ONLY
+
+
+def gaps(provider: str = "journald") -> list[str]:
+    """Techniques this provider cannot see. Never report these as missed."""
+    return sorted(t for t in COVERAGE if visibility(t, provider) == "no-telemetry")
+
+
+def observed(provider: str = "journald") -> list[str]:
+    return sorted(t for t in COVERAGE if visibility(t, provider) == "observed")

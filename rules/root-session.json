@@ -1,0 +1,11 @@
+{
+  "id": "root-session",
+  "title": "Interactive root session opened",
+  "severity": "medium",
+  "technique": "T1078.003",
+  "why": "A root login session on a desktop is either a deliberate maintenance window or someone who found root.",
+  "false_positives": [
+    "a TTY session opened by an administrator on purpose"
+  ],
+  "when": { "event_type": "session_open", "user": "root" }
+}

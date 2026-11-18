@@ -1,0 +1,16 @@
+{
+  "id": "auth-brute-force",
+  "title": "Repeated authentication failures",
+  "severity": "high",
+  "technique": "T1110.001",
+  "why": "Five failures inside ten minutes, counted per source, is the shape of a password guess. Fewer than five is a typo.",
+  "false_positives": [
+    "a user mistyping a password repeatedly",
+    "a service with a stale credential retrying",
+    "several people behind the same NAT source address"
+  ],
+  "when": { "event_type": "auth_failure" },
+  "group_by": "src_ip",
+  "count_gte": 5,
+  "within": "10m"
+}

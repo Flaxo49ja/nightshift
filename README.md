@@ -1,12 +1,13 @@
 # nightshift
 
 A single-machine SOC practice range. It collects **real** host telemetry from
-your own Linux box, and later slices add safe attack simulations, detections
-and a scored triage queue — so the feedback comes from evidence, not vibes.
+your own Linux box, applies detection rules, gives you a triage queue, injects
+safe simulations so detection quality can be measured, and scores the result
+against ground truth — so the feedback comes from evidence, not vibes.
 
-> Status: **slice 1 of 4** — events + journald collector.
-> Nothing here attacks anything or changes system state; it only reads the
-> journal.
+> Status: **all four slices** — events + journald/auditd collectors, JSON rules
+> and a triage queue, safe technique injector with a scorecard, ATT&CK coverage
+> report. Nothing here attacks anything off the machine or changes system state.
 
 ## Why this shape
 
@@ -16,10 +17,14 @@ real. That needs a ground-truth loop, which this project builds in slices:
 
 | Slice | What it adds |
 |---|---|
-| **1 (this)** | normalized events, journald collector, cursor, fixtures |
-| 2 | JSON detection rules + engine + triage queue |
-| 3 | safe technique injector, ground truth, blind mode, scorecard |
-| 4 | auditd provider + ATT&CK coverage report |
+| **1** | normalized events, journald collector, cursor, fixtures |
+| **2** | JSON detection rules + engine + triage queue |
+| **3** | safe technique injector, ground truth, blind mode, scorecard |
+| **4** | auditd provider + ATT&CK coverage report |
+
+The whole point is `nightshift score`. Anyone can print alerts; only a range with
+ground truth can tell you your recall was 100% on one technique and that two of
+your three alerts were noise.
 
 ## Install (fish)
 
@@ -34,27 +39,28 @@ Without installing, run it from the source tree:
 
 ```fish
 set -x PYTHONPATH src
-python3 -m nightshift.cli collect
+python3 -m nightshift.cli --help
 ```
 
-## Use
+## The shift
+
+```
+collect -> scan -> shift -> inject -> collect -> scan -> score
+```
 
 ```fish
 nightshift collect                 # first run: last 7 days, then cursor-based
-nightshift collect --since 24h     # explicit first-run window
-nightshift collect --since 2026-10-01T00:00:00Z
-nightshift collect --all           # keep every identifier, not just the allowlist
-nightshift collect --state-dir /tmp/ns
+nightshift scan                    # apply rules/ to events.jsonl
+nightshift shift                   # work the triage queue
+nightshift inject                  # run safe simulations, record ground truth
+nightshift score                   # detections vs ground truth
+nightshift coverage                # ATT&CK visibility report
 ```
 
 **First-run behaviour:** with no saved cursor, `collect` reads the **last 7
-days** and says so in its output. A 7-day default is a compromise: a whole
-journal is slow and mostly noise, while "since now" would look like a working
-collector that found nothing. Override with `--since 7d`, `24h`, `45m`, or an
-ISO8601 timestamp.
-
-After the first run the cursor takes over: each run reads only entries newer
-than the last one, and a second run over unchanged data writes **0 new events**.
+days** and says so in its output. After that the cursor takes over: each run
+reads only newer entries, and a second run over unchanged data writes **0 new
+events**.
 
 ### What gets dropped, and why
 
@@ -66,7 +72,8 @@ Default allowlist: `sudo`, `su`, `sshd`, `systemd`, `systemd-logind`,
 Everything else on a desktop is application stdout. On this machine one
 download manager alone produced ~1,200 of the last 2,000 lines; collecting it
 would bury the signal. Every run prints the dropped count **per identifier**,
-and `--all` keeps them.
+and `--all` keeps them. auditd has no allowlist: every audit record is security
+relevant.
 
 ## The normalized event
 
@@ -78,53 +85,142 @@ the journal does not carry the value.
 | `id` | `sha256(provider + cursor)[:16]` — dedupe key, and how you get back to the raw entry |
 | `ts` | RFC3339 UTC, microsecond precision — one format so MTTD is subtraction |
 | `host` | `_HOSTNAME` |
-| `provider` | `journald` now, `auditd` later |
+| `provider` | `journald` or `auditd` |
 | `source` | `SYSLOG_IDENTIFIER`, falling back to `_COMM` |
 | `event_type` | closed vocabulary (below) |
-| `priority` | journal priority 0–7 |
-| `unit` | `_SYSTEMD_USER_UNIT` or `_SYSTEMD_UNIT` |
-| `user` | best-effort; `null` rather than guessed |
-| `pid`, `process`, `cmdline` | process context when the journal carries it |
-| `src_ip`, `src_port` | parsed from auth messages |
+| `priority` | journal priority 0–7 (`null` for auditd: it has none) |
+| `unit`, `user`, `pid`, `process`, `cmdline`, `src_ip`, `src_port` | context, `null` rather than guessed |
 | `message` | the raw human line |
 
 Event types: `auth_success`, `auth_failure`, `sudo_command`, `session_open`,
 `session_close`, `service_start`, `service_stop`, `service_failed`,
-`timer_run`, `cron_run`, `account_change`, `unknown`.
+`timer_run`, `cron_run`, `account_change`, `process_exec`, `unknown`.
 
 There is deliberately no copy of the raw journal record: the journal is the
 archive, and `id` can seek back to it.
 
-## Cursor and gaps
+## Detection rules
 
-`cursor.json` holds the last `__CURSOR` seen, its timestamp, and the host.
-Writing order is **append events → fsync → save cursor**, so a crash can
-duplicate a line (dedupe removes it) but never lose one.
+Rules are JSON in `rules/`, one file each, and a rule is **data, not code**.
 
-If the journal has rotated past the saved cursor, `journalctl` refuses it. The
-collector then restarts from the cursor's timestamp and prints:
+```json
+{
+  "id": "auth-brute-force",
+  "title": "Repeated authentication failures",
+  "severity": "high",
+  "technique": "T1110.001",
+  "when": { "event_type": "auth_failure" },
+  "group_by": "src_ip",
+  "count_gte": 5,
+  "within": "10m",
+  "why": "Five failures inside ten minutes, counted per source, is the shape of a password guess.",
+  "false_positives": ["a user mistyping a password repeatedly"]
+}
+```
+
+* `when` — AND over event fields. Scalars match exactly, lists are membership.
+  Three derived matchers exist: `message_contains`, `cmdline_contains`,
+  `unit_contains` (case-insensitive substrings).
+* `count_gte` + `within` + `group_by` — a burst rule. A 500-event brute force
+  fires **once**, not 500 times: an alert an analyst cannot triage is not an
+  alert.
+* `technique` — the ATT&CK mapping the scorecard and coverage report use.
+
+A typo'd field name is a load-time error with the list of valid fields. That is
+the whole safety argument for making rules data: a rule that silently never
+fires is worse than no rule at all.
+
+## Triage
+
+`shift` joins `detections.jsonl` with `queue.json`. Every detection starts `new`.
+
+```fish
+nightshift shift                             # list, newest first
+nightshift shift --confirm 5bbaacc8          # any unambiguous id prefix
+nightshift shift --dismiss 2f471db4 --note "my own timer, not an attack"
+nightshift shift --all                        # include dismissed
+```
+
+The note is kept because "why did I dismiss this" is the part you forget in a
+week. An ambiguous prefix is an error, never a guess.
+
+## Safe simulations
+
+`nightshift inject` runs each technique once and records ground truth **before**
+anything reads it.
+
+| Technique | Simulation | Touches |
+|---|---|---|
+| T1548.003 | `sudo -n -l` | nothing — no password, no state |
+| T1053.006 | transient `systemd-run --user` timer, then `reset-failed` | a unit that is removed again |
+| T1105 | fetch one file from a loopback HTTP server | 127.0.0.1 only |
+| T1046 | TCP connect sweep of loopback ports 1–20 | 127.0.0.1 only |
+
+Nothing leaves the machine, nothing persists, and a missing binary is `skipped`
+with the reason rather than a crash. `--blind` records the truth without
+printing which technique ran (the file is chmod `0600`, so reading the answers
+is a deliberate act).
+
+Credential attacks are **not** simulated: password guessing needs a password
+prompt, a real account and a plausible failure mode, and getting it wrong means
+locking an account on your own box. Use the fixtures for T1110.001.
+
+### The finding this design produced
+
+On this box `sudo -n -l` and a failed `su` write **nothing** to the journal: sudo
+fails before PAM logging, and `su` to a missing user never reaches auth. So the
+injector verifies what actually landed and records `observed: 0`. The scorecard
+then reports T1548.003 as *"ran but recorded nothing (simulation limit)"* rather
+than as a missed detection — those are different problems and they want
+different fixes.
+
+## The scorecard
 
 ```
-  telemetry gap: <saved_at> → <now> (journal rotated; restarted from saved_at)
+TECH      VISIBILITY     INJECTED  CAUGHT  MISSED
+T1046     no-telemetry          0       0       0   not scored: no telemetry
+T1053.006 observed              1       1       0
+T1105     no-telemetry          0       0       0   not scored: no telemetry
+T1548.003 observed              0       0       0   not scored: nothing observed
+
+recall     100%  (1 caught, 0 missed, 1 scored technique(s))
+precision  33%  (2 false positive(s))
 ```
 
-It never silently resumes at "now" — a hidden gap is how analysts get burned.
+* A detection matches truth when the technique agrees and the windows overlap
+  within five minutes of slack — journald writes asynchronously.
+* **No telemetry is not a miss.** Techniques the provider cannot see are shown
+  as `no telemetry` and left out of the recall arithmetic. `coverage.py` owns
+  that decision in one table so it cannot drift.
+* **Nothing observed is not a detection failure.** Same treatment, different
+  reason, different line in the report.
+* **Any detection that lines up with no injection is a false positive** — even
+  if it looks plausible, and even if it was a real event on the host. In the run
+  above, two `systemd-run` probes from earlier in the session were counted as
+  false positives because they were not part of that injection. That is the
+  honest reading of the number, not a bug.
 
-## What journald cannot see
+## What journald cannot see, and auditd can
 
-`src/nightshift/coverage.py` records this, and the scorecard will consult it so
-"no telemetry" is never reported as "you missed it":
+`nightshift collect --provider auditd` parses `/var/log/audit/audit.log`
+(`--file` for a fixture). `auditd` records `execve`, which is the only way
+`curl` and `nmap` become visible on a box where journald logs service output
+rather than process execution.
 
-| Technique | journald |
-|---|---|
-| T1110.001 Password Guessing (`su` failures) | observed |
-| T1548.003 Sudo and Sudo Caching (`sudo -l`) | observed |
-| T1053.006 Systemd Timers | observed |
-| T1105 Ingress Tool Transfer (`curl`) | **no telemetry** |
-| T1046 Network Service Discovery (`nmap`) | **no telemetry** |
+| Technique | journald | auditd |
+|---|---|---|
+| T1110.001 Password Guessing | observed | unknown |
+| T1548.003 Sudo and Sudo Caching | observed | observed |
+| T1053.006 Systemd Timers | observed | observed |
+| T1105 Ingress Tool Transfer | **no telemetry** | observed |
+| T1046 Network Service Discovery | **no telemetry** | observed |
+| T1136.001 Local Account Creation | observed | observed |
+| T1078.003 Valid Accounts: Local | observed | unknown |
 
-`cron_run` is marked **fixture-only**: cron is not installed on this machine, so
-it must never count as real coverage.
+`nightshift coverage` prints this as a matrix, marks blind spots, and lists
+visible techniques that no rule covers yet. `cron_run` is marked
+**fixture-only**: cron is not installed on this machine, so it must never count
+as real coverage.
 
 ## Fixtures
 
@@ -139,15 +235,26 @@ hostname, username or address appears in them.
 python3 -m unittest discover -s tests -v
 ```
 
-50 tests, no network, no journal access, no system changes.
+153 tests, no network, no journal access, no system changes. They cover the
+schema contract, cursor gaps, rule validation and burst windows, the triage
+queue, injector safety (loopback only, cleanup, blind file mode), the
+scorecard's honesty rules, and one end-to-end shift over the fixtures.
 
 ## Honest limits
 
 - On a quiet window the allowlist yields almost nothing: this machine logged 34
   firewall blocks in 45 minutes and no auth events. That is a real lesson about
-  baselines, but it means slice 3's simulations are what create signal.
-- `_CMDLINE` is usually absent for services, so `cmdline` is often `null`.
+  baselines, and it is why the injector exists.
+- `/var/log/audit/audit.log` is root-only on a default install. Without sudo the
+  auditd provider says so instead of reporting a clean zero; use `--file` with a
+  fixture to work offline.
+- `sudo` events are only recorded when sudo actually reaches PAM. `sudo -n`
+  failures, and `su` to a nonexistent user, are invisible — see above.
+- `_CMDLINE` is usually absent for services, so `cmdline` is often `null`
+  outside the auditd provider.
 - `fetch()` reads the whole window into memory before filtering. Fine for seven
   days on this box; streaming is a v2 concern.
-- journald logs service output, not process execution: `curl` and `nmap` are
-  invisible until the auditd provider exists.
+- The scorecard only knows what was injected. Host activity outside injection
+  windows counts as false positive by design, so scores are meaningful per run,
+  not across a shared timeline.
+- One machine, one vantage point. This teaches triage, not detection at scale.

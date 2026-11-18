@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nightshift"
-version = "0.1.0"
+version = "0.2.0"
 description = "A single-machine SOC practice range: collect host telemetry, detect, triage, score."
 readme = "README.md"
 requires-python = ">=3.11"

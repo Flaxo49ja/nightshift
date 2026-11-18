@@ -1,0 +1,11 @@
+{
+  "id": "account-change",
+  "title": "Local account created, modified or removed",
+  "severity": "high",
+  "technique": "T1136.001",
+  "why": "Account changes are rare on a single-user workstation and are persistence when they are not yours.",
+  "false_positives": [
+    "a package or installer creating a service account"
+  ],
+  "when": { "event_type": "account_change" }
+}
