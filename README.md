@@ -9,6 +9,10 @@ against ground truth — so the feedback comes from evidence, not vibes.
 > and a triage queue, safe technique injector with a scorecard, ATT&CK coverage
 > report. Nothing here attacks anything off the machine or changes system state.
 
+New here? **[TEACH.md](TEACH.md)** is a ten-minute copy-paste lab: look at your own
+host, run the ground-truth loop, then move a rule threshold and watch the noise
+appear.
+
 ## Why this shape
 
 Most "SOC projects" end up teaching you to install a SIEM. The daily work is
