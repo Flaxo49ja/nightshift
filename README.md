@@ -61,6 +61,10 @@ nightshift score                   # detections vs ground truth
 nightshift coverage                # ATT&CK visibility report
 ```
 
+See it work before you trust it: `nightshift demo` runs the whole loop —
+collect, scan, inject, collect, scan, score — in a throwaway `/tmp` state dir and
+tells you where to look afterwards. `--since` sets the first window (default 1h).
+
 **First-run behaviour:** with no saved cursor, `collect` reads the **last 7
 days** and says so in its output. After that the cursor takes over: each run
 reads only newer entries, and a second run over unchanged data writes **0 new
@@ -240,7 +244,7 @@ hostname, username or address appears in them.
 python3 -m unittest discover -s tests -v
 ```
 
-174 tests, no network, no journal access, no system changes. They cover the
+177 tests, no network, no journal access, no system changes. They cover the
 schema contract, cursor gaps, rule validation and burst windows, the triage
 queue, injector safety (loopback only, cleanup, blind file mode), the
 scorecard's honesty rules, and one end-to-end shift over the fixtures.

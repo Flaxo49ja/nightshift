@@ -14,6 +14,7 @@ import json
 import os
 import platform
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -110,6 +111,10 @@ def build_parser() -> argparse.ArgumentParser:
     score_cmd.add_argument("--state-dir", type=Path, default=default_state_dir())
     score_cmd.add_argument("--truth", type=Path, default=None,
                            help="ground-truth file (default: <state-dir>/truth.jsonl)")
+
+    demo_cmd = sub.add_parser("demo", help="run the whole loop in a throwaway state dir")
+    demo_cmd.add_argument("--since", default="1h",
+                          help="first collect window (default: 1h)")
 
     coverage_cmd = sub.add_parser("coverage", help="ATT&CK visibility report")
     coverage_cmd.add_argument("--provider", choices=("journald", "auditd"), default="journald")
@@ -323,6 +328,44 @@ def score(args) -> int:
     return 0
 
 
+def demo(args) -> int:
+    """The shift, end to end, in a directory nobody cares about.
+
+    Every step is the same function the real subcommand calls, so the demo
+    cannot drift from the pipeline it is demonstrating.
+    """
+    state_dir = Path(tempfile.mkdtemp(prefix="nightshift-demo-"))
+    rules = default_rules_dir()
+    print(f"nightshift demo — throwaway range at {state_dir}")
+    print("  your real store is untouched; injection is loopback/local only")
+
+    steps = (
+        ("collect", lambda: collect(argparse.Namespace(
+            state_dir=state_dir, provider="journald", file=None, all=False,
+            since=args.since))),
+        ("scan", lambda: scan(argparse.Namespace(state_dir=state_dir, rules=rules))),
+        ("inject", lambda: inject(argparse.Namespace(
+            state_dir=state_dir, technique=None, blind=False, no_verify=False))),
+        ("collect", lambda: collect(argparse.Namespace(
+            state_dir=state_dir, provider="journald", file=None, all=False,
+            since=None))),
+        ("scan", lambda: scan(argparse.Namespace(state_dir=state_dir, rules=rules))),
+        ("score", lambda: score(argparse.Namespace(state_dir=state_dir, truth=None))),
+    )
+    for index, (name, step) in enumerate(steps, 1):
+        print(f"\n  ── {index}/{len(steps)} {name} " + "─" * 46)
+        code = step()
+        if code:
+            print(f"\ndemo stopped at `{name}` (exit {code}); nothing was changed",
+                  file=sys.stderr)
+            return code
+
+    print(f"\n  that is the whole loop. inspect it: ls {state_dir}")
+    print(f"  work the queue: nightshift shift --state-dir {state_dir}")
+    print(f"  remove it:      rm -rf {state_dir}")
+    return 0
+
+
 def coverage(args) -> int:
     techniques = set()
     try:
@@ -348,6 +391,8 @@ def main(argv: list[str] | None = None) -> int:
             return inject(args)
         if args.command == "score":
             return score(args)
+        if args.command == "demo":
+            return demo(args)
         if args.command == "coverage":
             return coverage(args)
     except ValueError as exc:          # bad --since, unknown technique

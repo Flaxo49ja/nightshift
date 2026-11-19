@@ -27,6 +27,21 @@ Check it works — this should print six subcommands:
 ns --help     # or: python3 -m nightshift.cli --help
 ```
 
+## 0.5 Show me everything at once
+
+```bash
+ns demo
+```
+
+That one command runs the whole loop — collect, scan, inject, collect, scan,
+score — in a throwaway `/tmp/nightshift-demo-*` directory, stops on the first
+step that fails, and prints the path so you can `ls` through the evidence. Your
+real store is never touched. `ns demo --since 7d` if one hour of journal feels
+thin.
+
+Everything below is the same loop one step at a time, which is how you actually
+learn it.
+
 ## 1. Look at your own host
 
 ```bash

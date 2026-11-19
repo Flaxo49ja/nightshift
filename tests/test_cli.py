@@ -3,14 +3,17 @@ drive it through a fake provider: no journald, no system changes.
 """
 import io
 import json
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
-from nightshift.cli import collect, parse_since, shift
+from nightshift.cli import (build_parser, collect, default_state_dir, demo,
+                            parse_since, shift)
 from nightshift.providers.base import CursorInvalid
 from nightshift.providers.journald import JournaldProvider
 
@@ -21,6 +24,59 @@ def raw(cursor, identifier, message, micros=1_793_390_651_000_000):
         "_HOSTNAME": "soc-lab", "SYSLOG_IDENTIFIER": identifier,
         "MESSAGE": message, "PRIORITY": "6", "_PID": "1", "_COMM": identifier,
     }
+
+
+class DemoTest(unittest.TestCase):
+    """The demo must never write into the real store, and must run the steps in
+    the order the shift actually happens."""
+
+    def test_demo_is_a_subcommand_with_a_short_window(self):
+        args = build_parser().parse_args(["demo"])
+        self.assertEqual((args.command, args.since), ("demo", "1h"))
+
+    def test_demo_runs_the_loop_in_a_throwaway_dir(self):
+        calls = []
+
+        def step(name):
+            def run(args):
+                calls.append((name, Path(args.state_dir)))
+                return 0
+            return run
+
+        out = io.StringIO()
+        with mock.patch.multiple("nightshift.cli", collect=step("collect"),
+                                 scan=step("scan"), inject=step("inject"),
+                                 score=step("score")), redirect_stdout(out):
+            code = demo(SimpleNamespace(since="1h"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual([name for name, _ in calls],
+                         ["collect", "scan", "inject", "collect", "scan", "score"])
+        state_dirs = {path for _, path in calls}
+        self.assertEqual(len(state_dirs), 1, "one directory for the whole loop")
+        state_dir = state_dirs.pop()
+        try:
+            self.assertNotEqual(state_dir.resolve(), default_state_dir().resolve())
+            self.assertTrue(str(state_dir).startswith(tempfile.gettempdir()))
+            self.assertIn(str(state_dir), out.getvalue())
+        finally:
+            shutil.rmtree(state_dir, ignore_errors=True)
+
+    def test_a_failing_step_stops_the_demo(self):
+        state = Path(tempfile.mkdtemp(prefix="nightshift-demo-test-"))
+        self.addCleanup(shutil.rmtree, state, True)
+        reached = []
+
+        def later(args):
+            reached.append(args)
+            return 0
+
+        with mock.patch.multiple("nightshift.cli", collect=lambda args: 1,
+                                 scan=later, inject=later, score=later), \
+                mock.patch("nightshift.cli.tempfile.mkdtemp", return_value=str(state)), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(demo(SimpleNamespace(since="1h")), 1)
+        self.assertEqual(reached, [], "nothing runs after the failing step")
 
 
 class FakeProvider:
