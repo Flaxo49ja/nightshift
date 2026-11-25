@@ -1,5 +1,7 @@
 # nightshift
 
+[![tests](https://github.com/Flaxo49ja/nightshift/actions/workflows/ci.yml/badge.svg)](https://github.com/Flaxo49ja/nightshift/actions/workflows/ci.yml)
+
 A single-machine SOC practice range. It collects **real** host telemetry from
 your own Linux box, applies detection rules, gives you a triage queue, injects
 safe simulations so detection quality can be measured, and scores the result
