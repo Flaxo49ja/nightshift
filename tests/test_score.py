@@ -38,10 +38,33 @@ class RecallTest(unittest.TestCase):
         self.assertEqual(len(card.false_positives), 1)
 
     def test_detections_outside_the_window_do_not_match(self):
+        # Scores as neither a catch nor a false alarm: the experiment did not
+        # observe it, so it is not evidence either way. It is still reported.
         late = "2026-10-30T20:30:00.000000Z"
         card = score([truth("T1110.001")], [detection("T1110.001", ts_first=late)])
         self.assertEqual(card.true_positives, 0)
-        self.assertEqual(len(card.false_positives), 1)
+        self.assertEqual(card.false_positives, [])
+        self.assertEqual([d["id"] for d in card.out_of_session], ["d1"])
+        self.assertIn("out of scope, not counted", render(card))
+
+    def test_probe_before_the_session_is_out_of_session(self):
+        early = "2026-10-30T19:40:00.000000Z"
+        card = score([truth("T1053.006", observed=1)],
+                     [detection("T1053.006", ident="probe", ts_first=early),
+                      detection("T1053.006", ident="injected")])
+        self.assertEqual(card.true_positives, 1)
+        self.assertEqual(card.precision, 1.0)
+        self.assertEqual([d["id"] for d in card.out_of_session], ["probe"])
+
+    def test_second_detection_of_a_caught_technique_is_a_repeat(self):
+        card = score([truth("T1053.006", observed=2)],
+                     [detection("T1053.006", ident="unit-started"),
+                      detection("T1053.006", ident="unit-finished",
+                                ts_first="2026-10-30T20:04:12.000000Z")])
+        self.assertEqual(card.true_positives, 1)
+        self.assertEqual(card.precision, 1.0)
+        self.assertEqual([d["id"] for d in card.repeats], ["unit-finished"])
+        self.assertIn("same technique already caught in the window", render(card))
 
     def test_journald_lag_within_slack_still_matches(self):
         # SLACK is 5 minutes; journald can be well behind wall clock

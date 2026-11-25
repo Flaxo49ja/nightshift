@@ -18,6 +18,17 @@ Four numbers matter, and each has a way of lying:
 A detection matches ground truth when the technique agrees and the windows
 overlap, allowing `SLACK` seconds: journald writes asynchronously, so a `sudo`
 call at 12:00:00.100 can appear at 12:00:00.400.
+
+Two kinds of detection are neither catches nor false positives, and counting
+them as either is how a scorecard starts lying:
+
+* **out of session** — older than the injection window. The technique may well
+  have run (a probe from a previous session), but this experiment did not
+  observe it, so it is not evidence either way. Still listed.
+* **repeat** — the same technique, inside the same injection window, already
+  caught by another rule. One `systemd-run` writes both a unit-started and a
+  unit-finished entry; two detections for one injection is one catch and one
+  duplicate, not one catch and one false alarm.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -52,6 +63,9 @@ class Scorecard:
     rows: list[TechniqueScore] = field(default_factory=list)
     false_positives: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
+    out_of_session: list[dict] = field(default_factory=list)
+    repeats: list[dict] = field(default_factory=list)
+    window: tuple[datetime, datetime] | None = None
 
     @property
     def scored_rows(self) -> list[TechniqueScore]:
@@ -82,10 +96,29 @@ def _overlaps(detection: dict, truth: dict) -> bool:
     return _ts(detection["ts_last"]) >= start and _ts(detection["ts_first"]) <= end
 
 
+def session_window(measures: list[dict]) -> tuple[datetime, datetime] | None:
+    """The span this experiment covers: first injection to last, plus `SLACK`."""
+    if not measures:
+        return None
+    start = min(_ts(item["started"]) for item in measures) - SLACK
+    end = max(_ts(item["ended"]) for item in measures) + SLACK
+    return start, end
+
+
+def _in_window(detection: dict, window: tuple[datetime, datetime] | None) -> bool:
+    if window is None:
+        return True
+    start, end = window
+    return _ts(detection["ts_last"]) >= start and _ts(detection["ts_first"]) <= end
+
+
 def score(truth: list[dict], detections: list[dict],
           provider: str = "journald") -> Scorecard:
     measures = [t for t in truth if t.get("status") == "ran"]
     skipped = [t for t in truth if t.get("status") != "ran"]
+    window = session_window(measures)
+    out_of_session = [d for d in detections if not _in_window(d, window)]
+    detections = [d for d in detections if _in_window(d, window)]
     matched: set[str] = set()
     by_technique: dict[str, TechniqueScore] = {}
 
@@ -113,10 +146,24 @@ def score(truth: list[dict], detections: list[dict],
                 row.detected += 1
                 break
 
+    unmatched = [d for d in detections if d["id"] not in matched]
+    # A second detection of a technique that was injected in this window is the
+    # same event seen twice, not an invented alert. Anything else is a false
+    # positive, including a plausible detection of the wrong technique.
+    repeats = [
+        d for d in unmatched
+        if any(d.get("technique") == item["technique"] and _overlaps(d, item)
+               for item in measures)
+    ]
+    repeat_ids = {d["id"] for d in repeats}
+
     return Scorecard(
         rows=sorted(by_technique.values(), key=lambda r: r.technique),
-        false_positives=[d for d in detections if d["id"] not in matched],
+        false_positives=[d for d in unmatched if d["id"] not in repeat_ids],
         skipped=skipped,
+        out_of_session=out_of_session,
+        repeats=repeats,
+        window=window,
     )
 
 
@@ -160,6 +207,18 @@ def render(card: Scorecard, provider: str = "journald") -> str:
     if silent:
         lines.append("  ran but recorded nothing (simulation limit, not a detection miss): "
                      + ", ".join(r.technique for r in silent))
+
+    if card.out_of_session or card.repeats:
+        lines.append("")
+        parts = []
+        if card.out_of_session:
+            parts.append(f"{len(card.out_of_session)} before the injection window")
+        if card.repeats:
+            parts.append(f"{len(card.repeats)} same technique already caught in the window")
+        lines.append("  out of scope, not counted: " + "; ".join(parts))
+        for detection in (card.out_of_session + card.repeats)[:10]:
+            lines.append(f"    {detection['ts_first']}  {detection.get('rule_id')}"
+                         f"  key={detection.get('key')}")
 
     if card.false_positives:
         lines.append("")

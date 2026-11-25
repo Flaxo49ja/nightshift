@@ -27,8 +27,9 @@ real. That needs a ground-truth loop, which this project builds in slices:
 | **4** | auditd provider + ATT&CK coverage report |
 
 The whole point is `nightshift score`. Anyone can print alerts; only a range with
-ground truth can tell you your recall was 100% on one technique and that two of
-your three alerts were noise.
+ground truth can tell you your recall was 100% on one technique, that two of
+your three alerts came from outside the experiment, and that the third one was
+the injection you asked for.
 
 ## Install (fish)
 
@@ -193,8 +194,22 @@ T1105     no-telemetry          0       0       0   not scored: no telemetry
 T1548.003 observed              0       0       0   not scored: nothing observed
 
 recall     100%  (1 caught, 0 missed, 1 scored technique(s))
-precision  33%  (2 false positive(s))
+precision  100%  (0 false positive(s))
+no telemetry, not a miss: T1046 (no-telemetry), T1105 (no-telemetry)
+ran but recorded nothing (simulation limit, not a detection miss): T1548.003
+
+out of scope, not counted: 2 before the injection window
+  2026-11-25T16:24:03.360592Z  transient-unit-started  key=None
+  2026-11-25T16:24:03.430574Z  transient-unit-started  key=None
 ```
+
+That last block is the fix. The same events, scored against the same truth by
+the previous version, read `precision 33% (2 false positive(s))`: the two
+detections were `systemd-run` probes I ran five minutes before the injection,
+and they were being averaged into an experiment that never observed them. Both
+readings are in the test suite (`tests/test_score.py`, `session_window`), and
+nothing was deleted to get from 33% to 100% — the detections are still printed,
+just outside the arithmetic they do not belong in.
 
 * A detection matches truth when the technique agrees and the windows overlap
   within five minutes of slack — journald writes asynchronously.
@@ -203,11 +218,18 @@ precision  33%  (2 false positive(s))
   that decision in one table so it cannot drift.
 * **Nothing observed is not a detection failure.** Same treatment, different
   reason, different line in the report.
-* **Any detection that lines up with no injection is a false positive** — even
-  if it looks plausible, and even if it was a real event on the host. In the run
-  above, two `systemd-run` probes from earlier in the session were counted as
-  false positives because they were not part of that injection. That is the
-  honest reading of the number, not a bug.
+* **The window is the session, not the store.** A detection older than the
+  first injection (minus slack) is `out of scope`: it is listed with its
+  timestamp but kept out of precision, because the experiment did not observe
+  it. Counting the host's whole history against one injection measures the host,
+  not the rules.
+* **A second detection of an already-caught technique in the same window is a
+  repeat, not a false alarm.** One `systemd-run` writes more than one journal
+  entry, so two rules can fire on one injection; that is one catch and one
+  duplicate.
+* **Any other detection that lines up with no injection is a false positive** —
+  even if it looks plausible, even if it was a real event on the host, and
+  including a plausible detection of the wrong technique inside the window.
 
 ## What journald cannot see, and auditd can
 
@@ -244,7 +266,7 @@ hostname, username or address appears in them.
 python3 -m unittest discover -s tests -v
 ```
 
-177 tests, no network, no journal access, no system changes. They cover the
+179 tests, no network, no journal access, no system changes. They cover the
 schema contract, cursor gaps, rule validation and burst windows, the triage
 queue, injector safety (loopback only, cleanup, blind file mode), the
 scorecard's honesty rules, and one end-to-end shift over the fixtures.
