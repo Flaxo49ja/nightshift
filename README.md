@@ -19,8 +19,8 @@ appear.
 
 - **2 of 2 injection variants across 1 technique** were caught in the last run of
   `nightshift demo`; both timer rules are also pinned by checked-in journal fixtures.
-- MTTD **6.1 s**, injection start to the scan that caught it, including the gap
-  between `collect` and `scan`; the first journal evidence landed at **1.0 s**.
+- MTTD **7.2 s**, injection start to the scan that caught it, including the gap
+  between `collect` and `scan`; the first journal evidence landed at **1.5 s**.
 - Precision **100%**, 0 false positives. Detections from outside the injection
   window are listed as out of scope or as repeats, never counted as catches.
 - Each variant is credited **only** to its designated rule: `transient-unit-started`
@@ -82,9 +82,11 @@ nightshift export-scenario --out scenario.json   # sanitized, scoreable exercise
 
 An export is one JSON file with the events, the answer key and the teaching
 text: [docs/scenario-format.md](docs/scenario-format.md), sample in
-[`examples/`](examples/). Hostnames, usernames, home paths and every IP are
-replaced before the file is written, and a test reads this machine's real
-identity to prove it.
+[`examples/`](examples/). Each event is labelled `attack_evidence`,
+`side_effect` (the injector's own reloads) or `benign`, injector names are
+renamed to fixed aliases, and `--noise` can mix in a quiet day. Hostnames,
+usernames, home paths and every IP are replaced before the file is written, and
+a test reads this machine's real identity to prove it.
 
 See it work before you trust it: `nightshift demo` runs the whole loop —
 collect, scan, inject, collect, scan, score — in a throwaway `/tmp` state dir and
@@ -213,7 +215,7 @@ different fixes.
 ```
 TECH      VISIBILITY     INJECTED  CAUGHT  MISSED     MTTD  EVIDENCE
 T1046     no-telemetry          0       0       0        —         —   not scored: no telemetry
-T1053.006 observed              2       2       0     6.1s      1.0s
+T1053.006 observed              2       2       0     7.2s      1.5s
 T1105     no-telemetry          0       0       0        —         —   not scored: no telemetry
 T1548.003 observed              0       0       0        —         —   not scored: nothing observed
 (only detections from a variant's designated rule count; the rest are repeats)
@@ -224,7 +226,7 @@ precision  100%  (0 false positive(s))
 no telemetry, not a miss: T1046 (no-telemetry), T1105 (no-telemetry)
 ran but recorded nothing (simulation limit, not a detection miss): T1548.003
 
-out of scope, not counted: 26 before the injection window; 4 same technique already caught in the window
+out of scope, not counted: 65 before the injection window; 1 same technique already caught in the window
   (each listed with timestamp and rule; trimmed here)
 ```
 

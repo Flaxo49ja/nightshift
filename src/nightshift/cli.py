@@ -126,6 +126,10 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument("--out", type=Path, required=True,
                             help="scenario JSON to write")
     export_cmd.add_argument("--lang", choices=("en", "pt"), default="en")
+    export_cmd.add_argument("--noise", type=Path, default=None,
+                            help="events.jsonl from a separate quiet collection, "
+                                 "mixed in as benign background")
+    export_cmd.add_argument("--rules", type=Path, default=default_rules_dir())
 
     baseline_cmd = sub.add_parser("baseline",
                                   help="alerts per hour per rule, with no injections")
@@ -290,19 +294,19 @@ def _verify_observed(records: list[dict]) -> None:
     for record in records:
         if record.get("status") != "ran":
             continue
-        expected = inject_mod.EXPECTED_EVENT_TYPES.get(record["technique"], set())
         start = parse_ts(record["started"])
-        end = parse_ts(record["ended"]) + timedelta(seconds=5)
         try:
             entries = provider.fetch(None, start - timedelta(seconds=2))
         except (RuntimeError, OSError):
             return                      # no journal access: leave `observed` unset
-        count = 0
+        events = []
         for entry in entries:
             event = provider.normalize(entry)
-            if event and event.event_type in expected and start <= parse_ts(event.ts) <= end:
-                count += 1
-        record["observed"] = count
+            if event:
+                events.append(event.to_dict())
+        # Same ownership rule the exporter uses, so truth.event_ids and
+        # `observed` always agree.
+        record["observed"] = len(inject_mod.evidence(record, events))
 
 
 def inject(args) -> int:
@@ -356,7 +360,11 @@ def export_scenario(args) -> int:
     if not truth:
         print("warning: no ground truth — the export will have no answer key",
               file=sys.stderr)
-    document = export_scenario_doc(events, truth, lang=args.lang)
+    detections = read_jsonl(args.state_dir / "detections.jsonl")
+    noise = read_jsonl(args.noise) if args.noise else []
+    document = export_scenario_doc(events, truth, lang=args.lang,
+                                   detections=detections, noise=noise,
+                                   rules=load_rules(args.rules))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")

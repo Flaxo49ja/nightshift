@@ -88,7 +88,8 @@ class ExportTest(unittest.TestCase):
 
     def test_document_has_the_documented_shape(self):
         doc = export([event()], self.truth(), lang="en")
-        self.assertEqual(set(doc), {"id", "lang", "events", "truth", "teach", "limits"})
+        self.assertEqual(set(doc), {"id", "lang", "events", "truth", "side_effect_ids",
+                                    "teach", "limits"})
         self.assertEqual(doc["lang"], "en")
         self.assertEqual(doc["events"][0]["host"], "soc-lab")
         self.assertTrue(doc["teach"]["prompt"])
@@ -155,7 +156,123 @@ class NoRealIdentifiersTest(unittest.TestCase):
                  "variant": "transient", "title": "User timer", "provider": "journald"}]
 
 
+def playable():
+    """One transient run and one on-disk timer run, with reload lines."""
+    events = [
+        event(id="e1", ts="2026-11-26T10:00:00.100000Z",
+              message="Started [systemd-run] /usr/sbin/true."),
+        event(id="e2", ts="2026-11-26T10:00:00.200000Z", event_type="unknown",
+              source="systemd", message="Reload requested from client PID 1 ('systemctl')"),
+        event(id="e3", ts="2026-11-26T10:00:02.000000Z",
+              message="Started [systemd-run] /usr/sbin/true."),
+        event(id="e4", ts="2026-11-26T10:00:05.000000Z", event_type="auth_failure",
+              source="su", message="FAILED su for root by analyst"),
+        event(id="e5", ts="2026-11-26T10:01:01.000000Z", event_type="timer_run",
+              unit="nightshift-bbbb2222.timer",
+              message="Started nightshift-bbbb2222.timer."),
+        event(id="e6", ts="2026-11-26T10:01:03.500000Z",
+              message="Starting nightshift simulated task..."),
+        event(id="e7", ts="2026-11-26T10:01:04.000000Z", event_type="unknown",
+              source="systemd", message="Reloading finished in 1004 ms."),
+    ]
+    truth = [
+        {"id": "nightshift-sim-aaaa1111.timer", "marker": "nightshift-sim-aaaa1111.timer",
+         "technique": "T1053.006", "variant": "transient", "status": "ran",
+         "observed": 2, "expected_rules": ["transient-unit-started"],
+         "started": "2026-11-26T10:00:00.000000Z",
+         "ended": "2026-11-26T10:00:01.000000Z"},
+        {"id": "nightshift-bbbb2222.timer", "marker": "nightshift-bbbb2222.timer",
+         "technique": "T1053.006", "variant": "unit-file", "status": "ran",
+         "observed": 1, "expected_rules": ["timer-unit-introduced"],
+         "started": "2026-11-26T10:01:00.000000Z",
+         "ended": "2026-11-26T10:01:03.000000Z"},
+    ]
+    return events, truth
+
+
+class PlayableScenarioTest(unittest.TestCase):
+    """A scenario has to say which line is the attack, which is the injector's
+    own noise, and which is unrelated background."""
+
+    def setUp(self):
+        self.events, self.truth = playable()
+        self.doc = export(self.events, self.truth, lang="en")
+
+    def test_every_event_has_exactly_one_label(self):
+        for item in self.doc["events"]:
+            self.assertIn(item["label"],
+                          {"attack_evidence", "side_effect", "benign"})
+
+    def test_attack_evidence_is_owned_by_exactly_one_record(self):
+        owned = {}
+        for record in self.doc["truth"]:
+            for event_id in record["event_ids"]:
+                self.assertNotIn(event_id, owned)
+                owned[event_id] = record["id"]
+        attack = {item["id"] for item in self.doc["events"]
+                  if item["label"] == "attack_evidence"}
+        self.assertEqual(attack, set(owned))
+
+    def test_observed_equals_the_evidence_that_record_owns(self):
+        for record in self.doc["truth"]:
+            self.assertEqual(record["observed"], len(record["event_ids"]))
+
+    def test_reload_lines_are_side_effects_not_attack_evidence(self):
+        self.assertEqual(len(self.doc["side_effect_ids"]), 2)
+        by_id = {item["id"]: item for item in self.doc["events"]}
+        for event_id in self.doc["side_effect_ids"]:
+            self.assertEqual(by_id[event_id]["label"], "side_effect")
+            self.assertIn("reload", by_id[event_id]["message"].lower())
+
+    def test_injector_names_are_renamed_to_fixed_aliases(self):
+        raw = json.dumps(self.doc["events"]) + json.dumps(self.doc["teach"])
+        self.assertNotIn("nightshift", raw.lower())
+        names = {item["unit"] for item in self.doc["events"] if item["unit"]}
+        self.assertEqual(names, {"backup-sync.timer", "user@1000.service"})
+
+    def test_the_alias_mapping_is_stable(self):
+        again = export(self.events, self.truth, lang="en")
+        self.assertEqual(self.doc["id"], again["id"])
+        self.assertEqual([e["unit"] for e in self.doc["events"]],
+                         [e["unit"] for e in again["events"]])
+
+    def test_teaching_is_per_technique_and_names_the_rule(self):
+        from nightshift.rules import load_rules
+
+        doc = export(self.events, self.truth, rules=load_rules(ROOT / "rules"))
+        entries = {entry["technique"]: entry for entry in doc["teach"]["techniques"]}
+        timer = entries["T1053.006"]
+        self.assertEqual(timer["rule_id"], "transient-unit-started")
+        self.assertTrue(timer["why"])
+        self.assertTrue(timer["looks_like"])
+        self.assertFalse(timer["blind_spot"])
+        self.assertTrue(entries["T1543.002"]["blind_spot"])
+        self.assertIn("enable", entries["T1543.002"]["why"])
+        self.assertIsNone(entries["T1543.002"]["rule_id"])
+
+    def test_noise_is_sanitized_ordered_and_benign(self):
+        noise = [event(id="n1", ts="2026-11-26T09:59:00.000000Z",
+                       host=socket.gethostname(), src_ip="10.9.8.7",
+                       message=f"from {socket.gethostname()} via 10.9.8.7")]
+        doc = export(self.events, self.truth, noise=noise)
+        times = [item["ts"] for item in doc["events"]]
+        self.assertEqual(times, sorted(times))
+        first = doc["events"][0]
+        self.assertEqual(first["id"], "n1")
+        self.assertEqual(first["label"], "benign")
+        self.assertEqual(first["host"], DOC_HOST)
+        self.assertIn("192.0.2.", first["message"])
+        self.assertNotIn("10.9.8.7", json.dumps(doc))
+        self.assertNotIn(socket.gethostname(), json.dumps(doc))
+
+
 class FixtureIdentifierTest(unittest.TestCase):
+    def test_no_export_names_the_range(self):
+        for path in sorted((ROOT / "examples").glob("*.json")):
+            doc = json.loads(path.read_text())
+            text = json.dumps(doc["events"]) + json.dumps(doc["teach"])
+            self.assertNotIn("nightshift", text.lower(), path.name)
+
     def test_no_fixture_mentions_this_machine(self):
         identifiers = real_identifiers()
         paths = sorted((ROOT / "fixtures").rglob("*.jsonl"))

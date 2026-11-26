@@ -26,13 +26,18 @@ import socket
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from .coverage import visibility
+from .schema import parse_ts
 
 PROVIDER = "journald"
+
+# journald writes asynchronously; a line belonging to a run can land seconds
+# after the injector has returned.
+OBSERVATION_GRACE = 5
 
 TECHNIQUES = {
     "T1548.003": "Sudo privilege enumeration (`sudo -n -l`)",
@@ -64,6 +69,9 @@ def _record(technique: str, status: str, started: str, reason: str = "",
             marker: str = "", **extra) -> dict:
     return {
         "id": marker or secrets.token_hex(6),
+        # The unit name this record created, so an exporter can find its lines
+        # again without guessing from timestamps.
+        "marker": marker,
         "technique": technique,
         "title": TECHNIQUES.get(technique, technique),
         "status": status,                     # ran | skipped | failed
@@ -236,6 +244,38 @@ INJECTORS = {
     "T1105": (inject_ingress,),
     "T1046": (inject_discovery,),
 }
+
+
+def evidence(record: dict, events: list[dict]) -> list[dict]:
+    """The journal events this injection record owns.
+
+    Used both to count `observed` at injection time and to label a scenario, so
+    the answer key and the evidence cannot disagree. A record with a marker only
+    claims lines that carry it; the transient variant is the exception, because
+    systemd logs its units by description (`Started [systemd-run] ...`) and the
+    unit name appears nowhere in the line.
+    """
+    expected = EXPECTED_EVENT_TYPES.get(record["technique"], set())
+    if not expected:
+        return []
+    start = parse_ts(record["started"])
+    end = parse_ts(record["ended"]) + timedelta(seconds=OBSERVATION_GRACE)
+    marker = record.get("marker") or ""
+    owned = []
+    for event in events:
+        if event.get("event_type") not in expected:
+            continue
+        if not start <= parse_ts(event["ts"]) <= end:
+            continue
+        message = event.get("message") or ""
+        if marker and marker not in message:
+            transient_line = (record.get("variant") == "transient"
+                              and event.get("event_type") == "service_start"
+                              and message.lower().startswith("started ["))
+            if not transient_line:
+                continue
+        owned.append(event)
+    return owned
 
 
 def run(techniques: list[str] | None = None, truth_path: Path | None = None,

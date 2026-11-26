@@ -1,21 +1,22 @@
-"""Export a scored session as a shareable, sanitized triage scenario.
+"""Export a scored session as a shareable, playable triage scenario.
 
-The export exists so one person's real box can become another person's
-exercise without leaking the first person's identifiers. Two rules make that
-true rather than aspirational:
+The export exists so one person's real box can become another person's exercise
+without leaking the first person's identifiers. Three rules make that true:
 
-* **Deny by substitution.** The exporter does not look for "sensitive-looking"
-  strings; it replaces the machine's own hostname, username and home path, and
-  every IP address it finds, including inside free text. What is left cannot be
-  a real identifier because the real identifiers were removed by value.
-* **One document, answer key included.** `truth` is in the same file as
-  `events`, so a scenario is self-contained and scoreable offline. That also
-  means an exported scenario is a spoiler: share it after the exercise, not
-  before.
+* **Deny by substitution.** The exporter replaces the machine's own hostname,
+  username, home path and every IP address by value, including inside free text.
+* **Say what the evidence is.** Each injection record owns the journal lines it
+  produced (`event_ids`); lines caused by the injector's own reloads are listed
+  as `side_effect_ids`; everything else is benign. A scenario can then be scored
+  without treating a `daemon-reload` notice as an attack.
+* **One document, answer key included.** `truth` lives beside `events`, so a
+  scenario is self-contained and scoreable offline. That also makes it a
+  spoiler: share it after the exercise, not before.
 
-Documentation ranges are used for addresses (192.0.2.0/24) and fixed names for
-identity (`ws-01`, `analyst`), which is what RFC 5737 and every style guide
-already reserve for examples.
+Injector-created names are renamed to aliases from a fixed list, deterministically
+per scenario, because `nightshift-*` and "nightshift simulated task" tell the
+reader exactly which range produced the file. Documentation ranges are used for
+addresses (192.0.2.0/24) and fixed names for identity (`ws-01`, `analyst`).
 """
 import getpass
 import hashlib
@@ -23,7 +24,11 @@ import json
 import platform
 import re
 import socket
+from datetime import timedelta
 from pathlib import Path
+
+from .inject import OBSERVATION_GRACE, evidence
+from .schema import parse_ts
 
 DOC_HOST = "ws-01"
 DOC_USER = "analyst"
@@ -35,6 +40,50 @@ IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4}(?![\w:])")
 DOC_NET = "192.0.2."
 
+# Fixed aliases, assigned in sorted order of the injector names a scenario
+# contains. Keeping the list short and boring is the point; a reader should not
+# be able to tell this was a practice range from the unit names.
+ALIASES = ("backup-sync", "media-indexer", "log-rotate", "photo-import",
+           "note-sync", "cache-warm")
+
+INJECTOR_NAME = re.compile(r"nightshift-(?:sim-)?[0-9a-f]{8}")
+DESCRIPTION = "nightshift simulated task"
+DESCRIPTION_ALIAS = "backup sync"
+
+# Manager lines produced by the injectors' own `daemon-reload`, not by the
+# simulated technique.
+SIDE_EFFECTS = ("reload requested", "reloading", "reloading finished")
+
+# How each technique looks in the journal, for the teaching block. Rule text
+# comes from the rule itself; this is the shape an analyst has to recognise.
+LOOKS_LIKE = {
+    "T1053.006": [
+        "Started [systemd-run] /usr/sbin/true. (transient timer's service)",
+        "Started <name>.timer. (on-disk timer being armed)",
+    ],
+    "T1548.003": ["a sudo command line, or an auth failure"],
+    "T1110.001": ["repeated auth failures for one user"],
+    "T1543.002": ["Starting <description>... with the unit recorded as the manager scope"],
+    "T1105": ["nothing in journald; auditd execve would be the only trace"],
+    "T1046": ["nothing in journald; firewall blocks are the closest signal"],
+}
+
+BLIND = {
+    "T1543.002": {
+        "name": "User service persistence",
+        "why": "`systemctl --user enable` and `disable` write nothing, and the "
+               "start line is `Starting <description>...` with the unit recorded "
+               "as the manager scope. A rule would key on the attacker's own "
+               "description or fire on every user service on the machine.",
+    },
+    "T1105": {"name": "Ingress tool transfer",
+             "why": "journald records service output, not process execution; "
+                    "the loopback fetch leaves no event to match."},
+    "T1046": {"name": "Network service discovery",
+              "why": "a connect sweep leaves no journal event; only the firewall's "
+                     "view of rejected packets is visible, and that is T1595.002."},
+}
+
 TEACH = {
     "en": {
         "title": "What happened on ws-01?",
@@ -43,8 +92,8 @@ TEACH = {
         "hints": [
             "Start from the unit, user and process fields; the message is free text.",
             "A detection is only a catch if it lands after the injection started.",
-            "The truth records say what ran, not what was detected: no `observed` means "
-            "the simulation was not checked against telemetry.",
+            "truth records list the attack evidence they own in `event_ids`; "
+            "`side_effect_ids` are the injector's own reload lines, not the technique.",
         ],
     },
     "pt": {
@@ -54,7 +103,8 @@ TEACH = {
         "hints": [
             "Comece pelos campos unit, user e process; a mensagem é texto livre.",
             "Uma detecção só conta se ocorrer depois do início da injeção.",
-            "Os registros de verdade dizem o que rodou, não o que foi detectado.",
+            "Os registros de verdade listam a evidência em `event_ids`; "
+            "`side_effect_ids` são recargas do próprio injetor, não a técnica.",
         ],
     },
 }
@@ -63,16 +113,23 @@ LIMITS = {
     "en": [
         "Sanitized: hostnames, usernames and home paths are replaced, and every IP "
         "address is mapped into 192.0.2.0/24. Timestamps are real.",
+        "Injector-created unit names and descriptions are aliases from a fixed list; "
+        "the aliasing is deterministic per scenario, so two exports of the same "
+        "session agree.",
         "The answer key is in this file. It is a scenario, not a quiz you can take blind.",
         "Only what the exporter's providers could see is here; a technique with no "
         "telemetry appears in truth with an empty event set.",
+        "Rule text in `teach` is quoted in English even in the Portuguese export.",
     ],
     "pt": [
         "Sanitizado: nomes de host, usuários e caminhos pessoais foram substituídos, e "
         "todo endereço IP foi mapeado para 192.0.2.0/24. Os horários são reais.",
+        "Nomes de unidades e descrições criados pelo injetor são apelidos de uma lista "
+        "fixa; o mapeamento é determinístico por cenário.",
         "O gabarito está neste arquivo. É um cenário, não um teste às cegas.",
         "Só está aqui o que os provedores conseguiam ver; uma técnica sem telemetria "
         "aparece na verdade com zero eventos.",
+        "O texto das regras em `teach` é citado em inglês mesmo na exportação em português.",
     ],
 }
 
@@ -120,6 +177,109 @@ class Sanitizer:
         return value
 
 
+def alias_map(events: list[dict], truth: list[dict]) -> dict[str, str]:
+    """Deterministic per scenario: names sorted, aliases assigned in that order."""
+    names = sorted(set(INJECTOR_NAME.findall(json.dumps(events) + json.dumps(truth))))
+    return {name: ALIASES[index % len(ALIASES)]
+            for index, name in enumerate(names)}
+
+
+def _rename(value, mapping: dict[str, str]):
+    if isinstance(value, str):
+        out = value
+        for name, alias in mapping.items():
+            out = out.replace(name, alias)
+        return out.replace(DESCRIPTION, DESCRIPTION_ALIAS)
+    if isinstance(value, list):
+        return [_rename(item, mapping) for item in value]
+    if isinstance(value, dict):
+        return {key: _rename(item, mapping) for key, item in value.items()}
+    return value
+
+
+def _in_window(event: dict, record: dict) -> bool:
+    start = parse_ts(record["started"])
+    end = parse_ts(record["ended"]) + timedelta(seconds=OBSERVATION_GRACE)
+    return start <= parse_ts(event["ts"]) <= end
+
+
+def label(events: list[dict], truth: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    """Attach one label per event and derive the per-record evidence ids.
+
+    attack_evidence: the events the injector's own record owns.
+    side_effect: the injector's reload lines inside a run window.
+    benign: everything else.
+    """
+    ran = [record for record in truth if record.get("status") == "ran"]
+    owned: dict[str, str] = {}
+    for record in ran:
+        record["event_ids"] = [event["id"] for event in evidence(record, events)]
+        for event_id in record["event_ids"]:
+            owned[event_id] = record["id"]
+
+    side_effect_ids: list[str] = []
+    labelled = []
+    for event in events:
+        if event["id"] in owned:
+            label_name = "attack_evidence"
+        elif any(_in_window(event, record) for record in ran) and any(
+                marker in (event.get("message") or "").lower() for marker in SIDE_EFFECTS):
+            label_name = "side_effect"
+            side_effect_ids.append(event["id"])
+        else:
+            label_name = "benign"
+        labelled.append({**event, "label": label_name})
+    return labelled, truth, side_effect_ids
+
+
+def _teach_entries(truth: list[dict], rules) -> list[dict]:
+    by_id = {rule.id: rule for rule in (rules or [])}
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for record in truth:
+        technique = record["technique"]
+        if technique in seen:
+            continue
+        seen.add(technique)
+        rule = next((by_id[rid] for rid in record.get("expected_rules") or []
+                     if rid in by_id), None)
+        if rule is None:
+            rule = next((r for r in (rules or []) if r.technique == technique), None)
+        if rule is not None:
+            entries.append({
+                "technique": technique,
+                "name": rule.title,
+                "why": rule.why,
+                "looks_like": LOOKS_LIKE.get(technique, []),
+                "false_positives": list(rule.false_positives),
+                "rule_id": rule.id,
+                "blind_spot": False,
+            })
+        else:
+            blind = BLIND.get(technique, {})
+            entries.append({
+                "technique": technique,
+                "name": blind.get("name", technique),
+                "why": blind.get("why", "no rule covers this technique for this provider"),
+                "looks_like": LOOKS_LIKE.get(technique, []),
+                "false_positives": [],
+                "rule_id": None,
+                "blind_spot": True,
+            })
+    if "T1543.002" not in seen:
+        blind = BLIND["T1543.002"]
+        entries.append({
+            "technique": "T1543.002",
+            "name": blind["name"],
+            "why": blind["why"],
+            "looks_like": LOOKS_LIKE["T1543.002"],
+            "false_positives": [],
+            "rule_id": None,
+            "blind_spot": True,
+        })
+    return entries
+
+
 def scenario_id(events: list[dict], truth: list[dict]) -> str:
     canonical = json.dumps({"events": events, "truth": truth}, sort_keys=True,
                            ensure_ascii=False)
@@ -127,18 +287,29 @@ def scenario_id(events: list[dict], truth: list[dict]) -> str:
 
 
 def export(events: list[dict], truth: list[dict], lang: str = "en",
-           sanitizer: Sanitizer | None = None) -> dict:
+           sanitizer: Sanitizer | None = None, detections=None,
+           noise: list[dict] | None = None, rules=None) -> dict:
     """Build the scenario document. Pure: same input, same id, no clock."""
     if lang not in TEACH:
         raise ValueError(f"unknown language {lang!r} (choose from {', '.join(TEACH)})")
     cleaner = sanitizer or Sanitizer()
-    clean_events = [cleaner.document(event) for event in events]
-    clean_truth = [cleaner.document(record) for record in truth]
+    mapping = alias_map(events, truth)
+
+    labelled, records, side_effect_ids = label(events, truth)
+    records = [dict(record) for record in records]
+    mixed = labelled + [{**event, "label": "benign"} for event in (noise or [])]
+    mixed.sort(key=lambda event: event["ts"])
+
+    clean_events = [_rename(cleaner.document(event), mapping) for event in mixed]
+    clean_truth = _rename(cleaner.document(records), mapping)
+    teach = dict(TEACH[lang])
+    teach["techniques"] = _teach_entries(records, rules)
     return {
         "id": scenario_id(clean_events, clean_truth),
         "lang": lang,
         "events": clean_events,
         "truth": clean_truth,
-        "teach": TEACH[lang],
+        "side_effect_ids": side_effect_ids,
+        "teach": teach,
         "limits": LIMITS[lang],
     }

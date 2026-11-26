@@ -228,7 +228,9 @@ class VerifyObservedTest(unittest.TestCase):
               "ended": "2026-10-30T20:04:02.000000Z"}
 
     def observed_at(self, ts):
-        event = SimpleNamespace(event_type="timer_run", ts=ts)
+        event = SimpleNamespace(event_type="timer_run", ts=ts, message="",
+                               to_dict=lambda: {"event_type": "timer_run", "ts": ts,
+                                                "message": "", "id": "e1"})
         provider = SimpleNamespace(fetch=lambda *a, **k: [event], normalize=lambda e: e)
         record = dict(self.RECORD)
         with mock.patch("nightshift.cli.JournaldProvider", return_value=provider):
