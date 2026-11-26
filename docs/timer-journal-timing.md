@@ -51,7 +51,32 @@ next. Tight accuracy makes the unit-file service start deterministic (1.1 s
 after its timer), but it does **not** move the transient service line away from
 `Started <name>.timer`: the reload reschedules it onto that event either way.
 
-No injector change: the second line is real telemetry for a real second unit,
-not a duplicate, and removing it would mean hiding a start rather than fixing
-one. The scorecard's repeat bucket is the correct handling. This is the
-behaviour recorded in the README's honest limits.
+## Paired runs, per run
+
+Relative to `Started <name>.timer` (T) and `Starting nightshift simulated task`
+(S), in seconds:
+
+| Accuracy | Run | second bracket − T | S − second bracket |
+|---|---|---|---|
+| default | 1 | +0.01 | 2.54 |
+| default | 2 | +0.01 | 2.53 |
+| default | 3 | +0.01 | 2.38 |
+| default | 4 | +0.01 | 2.54 |
+| default | 5 | +0.01 | 2.54 |
+| 100 ms | 1 | +0.01 | 1.10 |
+| 100 ms | 2 | +0.01 | 1.10 |
+| 100 ms | 3 | +0.01 | 1.10 |
+| 100 ms | 4 | +0.01 | 1.08 |
+| 100 ms | 5 | +0.01 | 1.06 |
+
+Tight accuracy narrows the gap to the unit-file service from 2.38–2.54 s to
+1.06–1.10 s, but it does not separate the bracket line from the timer start: it
+is still +0.01 s in 10 of 10 paired runs. So the setting does not fix the thing
+it was tried for, and the injectors are unchanged.
+
+## Why no injector change
+
+The second line is real telemetry for a real second unit, not a duplicate, and
+removing it would mean hiding a start rather than fixing one. The scorecard's
+repeat bucket is the correct handling. This is the behaviour recorded in the
+README's honest limits.
