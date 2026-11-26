@@ -17,12 +17,13 @@ every one of them is a place to hide a bug.
 import hashlib
 import json
 import re
+import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .schema import parse_ts
+from .schema import parse_ts, rfc3339_utc
 
 # Event fields a rule may filter on. Anything else is a typo, not a feature.
 MATCH_FIELDS = frozenset({
@@ -224,12 +225,16 @@ def detection_id(rule_id: str, first_event_id: str) -> str:
     return hashlib.sha256(f"{rule_id}:{first_event_id}".encode()).hexdigest()[:16]
 
 
-def evaluate(events: list[dict], rules: list[Rule]) -> list[dict]:
+def evaluate(events: list[dict], rules: list[Rule],
+             detected_at: str | None = None) -> list[dict]:
     """Stream events once, keeping one sliding window per (rule, group).
 
     Sorted first: `events.jsonl` is append-ordered per collector run, and two
     runs can interleave. Rules over time need time order, not file order.
     """
+    # One timestamp for the whole pass: a scan is one act, and two detections
+    # from it were not produced at two different times.
+    scanned_at = detected_at or rfc3339_utc(time.time_ns() // 1000)
     ordered = sorted(events, key=_ts)
     detections: list[dict] = []
     windows: dict[tuple[str, str], deque] = defaultdict(deque)
@@ -241,7 +246,7 @@ def evaluate(events: list[dict], rules: list[Rule]) -> list[dict]:
             if not matches(rule.when, event):
                 continue
             if not rule.is_burst:
-                detections.append(_detection(rule, [event], event.get(rule.group_by)))
+                detections.append(_detection(rule, [event], event.get(rule.group_by), scanned_at))
                 continue
 
             key = (rule.id, str(event.get(rule.group_by) or "<none>"))
@@ -256,13 +261,14 @@ def evaluate(events: list[dict], rules: list[Rule]) -> list[dict]:
             cooled = last is None or (when - last).total_seconds() > rule.within
             if len(window) >= rule.count_gte and cooled:
                 fired_at[key] = when
-                detections.append(_detection(rule, list(window), key[1]))
+                detections.append(_detection(rule, list(window), key[1], scanned_at))
 
     detections.sort(key=lambda d: (d["ts_first"], d["rule_id"]))
     return detections
 
 
-def _detection(rule: Rule, events: list[dict], key: str | None) -> dict:
+def _detection(rule: Rule, events: list[dict], key: str | None,
+               detected_at: str) -> dict:
     first, last = events[0], events[-1]
     return {
         "id": detection_id(rule.id, first["id"]),
@@ -275,6 +281,7 @@ def _detection(rule: Rule, events: list[dict], key: str | None) -> dict:
         "host": first.get("host"),
         "ts_first": first["ts"],
         "ts_last": last["ts"],
+        "detected_at": detected_at,
         "event_ids": [e["id"] for e in events],
         "rule_sha": rule.sha,
     }

@@ -49,7 +49,10 @@ class TechniqueScore:
     unscored: int = 0        # no telemetry possible: never a miss
     unobserved: int = 0      # ran, but produced no event on this host
     note: str = ""
-    mttd: float | None = None  # mean seconds from injection to first detection
+    # Mean seconds from injection start to the scan that produced the first
+    # catch, and to the journal line it was built from. MTTD is the former.
+    mttd: float | None = None
+    time_to_evidence: float | None = None
 
     @property
     def missed(self) -> int:
@@ -124,6 +127,7 @@ def score(truth: list[dict], detections: list[dict],
     by_technique: dict[str, TechniqueScore] = {}
     variants: dict[tuple[str, str], dict] = {}
     latencies: dict[str, list[float]] = {}
+    evidence: dict[str, list[float]] = {}
 
     for item in measures:
         technique = item["technique"]
@@ -151,10 +155,18 @@ def score(truth: list[dict], detections: list[dict],
                 matched.add(detection["id"])
                 row.detected += 1
                 bucket["caught"] += 1
-                latencies.setdefault(technique, []).append(
-                    (parse_ts(detection["ts_first"]) - parse_ts(item["started"])).total_seconds())
+                started = parse_ts(item["started"])
+                evidence.setdefault(technique, []).append(
+                    (parse_ts(detection["ts_first"]) - started).total_seconds())
+                # No detected_at means an old detection file; MTTD stays
+                # undefined rather than being invented from ts_first.
+                if detection.get("detected_at"):
+                    latencies.setdefault(technique, []).append(
+                        (parse_ts(detection["detected_at"]) - started).total_seconds())
                 break
 
+    for technique, samples in evidence.items():
+        by_technique[technique].time_to_evidence = sum(samples) / len(samples)
     for technique, samples in latencies.items():
         by_technique[technique].mttd = sum(samples) / len(samples)
 
@@ -188,7 +200,7 @@ def score(truth: list[dict], detections: list[dict],
 def render(card: Scorecard, provider: str = "journald") -> str:
     lines = [f"nightshift score — provider {provider}", ""]
     lines.append(f"  {'TECH':<10}{'VISIBILITY':<14}{'INJECTED':>9}{'CAUGHT':>8}"
-                 f"{'MISSED':>8}{'MTTD':>9}")
+                 f"{'MISSED':>8}{'MTTD':>9}{'EVIDENCE':>10}")
     for row in card.rows:
         tail = ""
         if not row.scored:
@@ -196,8 +208,9 @@ def render(card: Scorecard, provider: str = "journald") -> str:
         elif row.unobserved and not row.injected:
             tail = "   not scored: nothing observed"
         mttd = f"{row.mttd:.1f}s" if row.mttd is not None else "—"
+        evidence = f"{row.time_to_evidence:.1f}s" if row.time_to_evidence is not None else "—"
         lines.append(f"  {row.technique:<10}{row.visibility:<14}{row.injected:>9}"
-                     f"{row.detected:>8}{row.missed:>8}{mttd:>9}{tail}")
+                     f"{row.detected:>8}{row.missed:>8}{mttd:>9}{evidence:>10}{tail}")
     if not card.rows:
         lines.append("  no injected techniques recorded — run `nightshift inject` first")
 
@@ -214,6 +227,10 @@ def render(card: Scorecard, provider: str = "journald") -> str:
         lines.append(f"  skipped {item['technique']}: {item.get('reason') or 'not run'}")
 
     lines.append("")
+    if any(r.mttd is not None for r in card.rows):
+        lines.append("  MTTD = injection start → the scan that caught it (includes collect + scan time)")
+        lines.append("  EVIDENCE = injection start → the journal line the detection was built from")
+        lines.append("")
     scored = card.scored_rows
     if scored:
         lines.append(f"  recall     {(card.recall or 0):.0%}  ({card.true_positives} caught, "

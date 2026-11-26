@@ -213,6 +213,14 @@ readings are in the test suite (`tests/test_score.py`, `session_window`), and
 nothing was deleted to get from 33% to 100% — the detections are still printed,
 just outside the arithmetic they do not belong in.
 
+* **MTTD is injection start → the scan that caught it**, so it includes the gap
+  between `collect` and `scan`. A store that was collected but never scanned has
+  no detection and therefore no MTTD; that is a fact about the pipeline, not a
+  rounding error. The older, faster figure — injection start → the journal line
+  the detection was built from — is printed separately as `EVIDENCE`, because
+  the two answer different questions and averaging them into one number is how
+  a practice range flatters itself. Detection files written before
+  `detected_at` existed show `—` for MTTD rather than a guess.
 * A detection matches truth when the technique agrees and the windows overlap
   within five minutes of slack — journald writes asynchronously.
 * **No telemetry is not a miss.** Techniques the provider cannot see are shown

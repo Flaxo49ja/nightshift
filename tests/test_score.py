@@ -12,10 +12,13 @@ def truth(technique, started="2026-10-30T20:04:00.000000Z",
 
 
 def detection(technique, ident="d1", ts_first="2026-10-30T20:04:11.000000Z",
-              ts_last=None, rule="r1", severity="high", key="k"):
-    return {"id": ident, "technique": technique, "rule_id": rule, "severity": severity,
-            "key": key, "ts_first": ts_first, "ts_last": ts_last or ts_first,
-            "count": 1, "event_ids": ["e1"], "title": "t"}
+              ts_last=None, rule="r1", severity="high", key="k", detected_at=None):
+    out = {"id": ident, "technique": technique, "rule_id": rule, "severity": severity,
+           "key": key, "ts_first": ts_first, "ts_last": ts_last or ts_first,
+           "count": 1, "event_ids": ["e1"], "title": "t"}
+    if detected_at:
+        out["detected_at"] = detected_at
+    return out
 
 
 class RecallTest(unittest.TestCase):
@@ -130,17 +133,31 @@ class VariantTest(unittest.TestCase):
                          {"injected": 1, "caught": 0})
 
 
-class MttdTest(unittest.TestCase):
-    def test_mttd_is_the_gap_from_injection_to_first_detection(self):
-        card = score([truth("T1110.001", started="2026-10-30T20:04:00.000000Z")],
-                     [detection("T1110.001", ts_first="2026-10-30T20:04:11.000000Z")])
-        self.assertAlmostEqual(card.rows[0].mttd, 11.0)
-        self.assertIn("MTTD", render(card))
-        self.assertIn("11.0s", render(card))
+class TimeToDetectTest(unittest.TestCase):
+    """MTTD is injection to *scan*, which is the number an alert pipeline is
+    judged on. Evidence time is the journal line to the scan and is faster by
+    the collect/scan gap, so the two are reported apart."""
 
-    def test_mttd_is_undefined_when_nothing_was_caught(self):
+    def test_mttd_is_the_gap_from_injection_to_the_scan(self):
+        card = score([truth("T1110.001", started="2026-10-30T20:04:00.000000Z")],
+                     [detection("T1110.001", ts_first="2026-10-30T20:04:11.000000Z",
+                                detected_at="2026-10-30T20:07:30.000000Z")])
+        self.assertAlmostEqual(card.rows[0].mttd, 210.0)
+        self.assertAlmostEqual(card.rows[0].time_to_evidence, 11.0)
+        text = render(card)
+        self.assertIn("MTTD", text)
+        self.assertIn("210.0s", text)
+        self.assertIn("11.0s", text)
+
+    def test_a_detection_without_a_scan_time_has_no_mttd_but_keeps_evidence(self):
+        card = score([truth("T1110.001")], [detection("T1110.001")])
+        self.assertIsNone(card.rows[0].mttd)
+        self.assertAlmostEqual(card.rows[0].time_to_evidence, 11.0)
+
+    def test_both_figures_are_undefined_when_nothing_was_caught(self):
         card = score([truth("T1110.001")], [])
         self.assertIsNone(card.rows[0].mttd)
+        self.assertIsNone(card.rows[0].time_to_evidence)
 
     def test_mttd_averages_the_variants_of_one_technique(self):
         card = score([
@@ -148,10 +165,13 @@ class MttdTest(unittest.TestCase):
             truth("T1053.006", started="2026-10-30T20:10:00.000000Z",
                   ended="2026-10-30T20:11:00.000000Z", observed=1, variant="b"),
         ], [
-            detection("T1053.006", ident="a", ts_first="2026-10-30T20:04:10.000000Z"),
-            detection("T1053.006", ident="b", ts_first="2026-10-30T20:10:30.000000Z"),
+            detection("T1053.006", ident="a", ts_first="2026-10-30T20:04:10.000000Z",
+                      detected_at="2026-10-30T20:05:00.000000Z"),
+            detection("T1053.006", ident="b", ts_first="2026-10-30T20:10:30.000000Z",
+                      detected_at="2026-10-30T20:12:00.000000Z"),
         ])
-        self.assertAlmostEqual(card.rows[0].mttd, 20.0)
+        self.assertAlmostEqual(card.rows[0].mttd, 90.0)
+        self.assertAlmostEqual(card.rows[0].time_to_evidence, 20.0)
 
 
 class HonestyTest(unittest.TestCase):

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from nightshift.providers.journald import JournaldProvider
+from nightshift.schema import parse_ts
 from nightshift.rules import (RuleError, detection_id, evaluate, load_rule,
                               load_rules, matches, parse_duration)
 
@@ -41,6 +42,28 @@ def normalize_fixture(name):
     rows = [json.loads(line) for line in (ROOT / "fixtures" / name).read_text().splitlines()
             if line.strip()]
     return [event.to_dict() for event in (provider.normalize(row) for row in rows) if event]
+
+
+class DetectedAtTest(unittest.TestCase):
+    """A detection has two times: when the journal line happened, and when the
+    scan saw it. MTTD uses the second."""
+
+    def test_every_detection_records_when_the_scan_ran(self):
+        rules = load_rules(ROOT / "rules")
+        detections = evaluate(normalize_fixture("timer_variants.jsonl"), rules,
+                              detected_at="2026-11-26T09:00:00.000000Z")
+        self.assertTrue(detections)
+        for item in detections:
+            self.assertEqual(item["detected_at"], "2026-11-26T09:00:00.000000Z")
+
+    def test_detected_at_defaults_to_the_moment_of_the_scan(self):
+        rules = load_rules(ROOT / "rules")
+        detections = evaluate(normalize_fixture("timer_variants.jsonl"), rules)
+        self.assertTrue(detections)
+        for item in detections:
+            self.assertTrue(item["detected_at"].endswith("Z"))
+            # never older than the event that produced it
+            self.assertGreaterEqual(parse_ts(item["detected_at"]), parse_ts(item["ts_first"]))
 
 
 class RuleHashTest(unittest.TestCase):
