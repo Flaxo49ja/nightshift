@@ -29,6 +29,12 @@ them as either is how a scorecard starts lying:
   caught by another rule. One `systemd-run` writes both a unit-started and a
   unit-finished entry; two detections for one injection is one catch and one
   duplicate, not one catch and one false alarm.
+
+A variant is only credited to the rule that is supposed to see it. Injection
+records name their `expected_rules`; a detection of the right technique from a
+different rule is a repeat, never a catch. Without this, "both variants caught"
+can be true while one of the two rules is dead, because the other rule fires
+twice.
 """
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -151,8 +157,14 @@ def score(truth: list[dict], detections: list[dict],
                                      {"injected": 0, "caught": 0, "rules": []})
         bucket["injected"] += 1
         started = parse_ts(item["started"])
+        designated = item.get("expected_rules") or ()
         for detection in detections:
             if detection.get("technique") != technique or detection["id"] in matched:
+                continue
+            # Right technique, wrong rule: not this variant's catch. It falls
+            # through to the repeat bucket, where every same-technique
+            # detection in the window lands.
+            if designated and detection.get("rule_id") not in designated:
                 continue
             # Slack exists for asynchronous journal writes, not for evidence
             # that predates the injection it is supposed to explain. Without
@@ -226,6 +238,10 @@ def render(card: Scorecard, provider: str = "journald") -> str:
     per_technique: dict[str, list[tuple[str, dict]]] = {}
     for (technique, variant), counts in card.variants.items():
         per_technique.setdefault(technique, []).append((variant, counts))
+    if card.variants and any("injected" in counts and counts["injected"]
+                             for counts in card.variants.values()):
+        lines.append("  a variant counts only detections from its own rule; "
+                     "other rules are repeats")
     for technique, parts in sorted(per_technique.items()):
         if len(parts) > 1:
             detail = ", ".join(f"{variant} {counts['caught']}/{counts['injected']}"

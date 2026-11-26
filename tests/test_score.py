@@ -1,8 +1,15 @@
 """The scorecard's job is to be uncomfortable: a blind spot is not a miss, and
 an invented alert is not a win."""
+import json
 import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from nightshift.providers.journald import JournaldProvider
+from nightshift.rules import evaluate, load_rules
 from nightshift.score import SLACK, score, render
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def truth(technique, started="2026-10-30T20:04:00.000000Z",
@@ -258,6 +265,75 @@ class PrecisionTest(unittest.TestCase):
         noise = [detection("T1105", ident=f"n{i}", rule="x") for i in range(12)]
         text = render(score([truth("T1110.001")], noise))
         self.assertIn("and 2 more", text)
+
+
+class DesignatedRuleTest(unittest.TestCase):
+    """A variant may only be credited to the rule that is meant to see it.
+
+    The mutation: remove one rule from the real rule directory, score the real
+    journal fixture, and the variant that rule owned must turn into a miss —
+    even though the other rule fires twice in the same window.
+    """
+
+    def setUp(self):
+        rows = [json.loads(line) for line in
+                (ROOT / "fixtures" / "timer_variants.jsonl").read_text().splitlines()]
+        provider = JournaldProvider()
+        self.events = [e.to_dict() for e in (provider.normalize(row) for row in rows) if e]
+        self.rules = load_rules(ROOT / "rules")
+
+    def line(self, event_type, suffix=None):
+        return next(e for e in self.events if e["event_type"] == event_type
+                    and (suffix is None or (e["unit"] or "").endswith(suffix)))
+
+    def truth(self, variant, expected_rules, ts):
+        started = (datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                   - timedelta(seconds=1)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        ended = (datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                 + timedelta(seconds=2)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        return truth("T1053.006", started=started, ended=ended, observed=1,
+                     variant=variant, expected_rules=expected_rules)
+
+    def transient_line(self):
+        return next(e for e in self.events
+                    if e["event_type"] == "service_start" and e["message"].startswith("Started ["))
+
+    def both_variants(self):
+        return [self.truth("transient", ["transient-unit-started"],
+                           self.transient_line()["ts"]),
+                self.truth("unit-file", ["timer-unit-introduced"],
+                           self.line("timer_run", ".timer")["ts"])]
+
+    def test_without_the_timer_rule_the_unit_file_variant_is_a_miss(self):
+        rules = [r for r in self.rules if r.id != "timer-unit-introduced"]
+        card = score(self.both_variants(), evaluate(self.events, rules))
+        self.assertEqual(card.variants[("T1053.006", "unit-file")]["caught"], 0)
+        self.assertEqual(card.variants[("T1053.006", "transient")]["caught"], 1)
+        self.assertEqual(card.false_negatives, 1)
+        text = render(card)
+        self.assertIn("unit-file 0/1", text)
+        self.assertIn("1 missed", text)
+
+    def test_without_the_transient_rule_the_transient_variant_is_a_miss(self):
+        rules = [r for r in self.rules if r.id != "transient-unit-started"]
+        card = score(self.both_variants(), evaluate(self.events, rules))
+        self.assertEqual(card.variants[("T1053.006", "transient")]["caught"], 0)
+        self.assertEqual(card.variants[("T1053.006", "unit-file")]["caught"], 1)
+        self.assertIn("transient 0/1", render(card))
+
+    def test_a_detection_from_the_wrong_rule_is_not_a_catch(self):
+        # Both rules exist, but the detection on the unit-file line names the
+        # transient rule: right technique, wrong rule, so no credit.
+        forged = [{"id": "forged", "technique": "T1053.006",
+                   "rule_id": "transient-unit-started", "severity": "medium",
+                   "key": None, "ts_first": self.line("timer_run", ".timer")["ts"],
+                   "ts_last": self.line("timer_run", ".timer")["ts"],
+                   "count": 1, "event_ids": ["e"], "title": "t"}]
+        card = score([self.truth("unit-file", ["timer-unit-introduced"],
+                                 self.line("timer_run", ".timer")["ts"])], forged)
+        self.assertEqual(card.true_positives, 0)
+        self.assertEqual(len(card.repeats), 1)
+        self.assertEqual(card.variants[("T1053.006", "unit-file")]["caught"], 0)
 
 
 if __name__ == "__main__":

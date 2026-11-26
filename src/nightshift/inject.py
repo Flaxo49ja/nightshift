@@ -104,7 +104,8 @@ def inject_timer(runner=_run) -> dict:
     unit = f"nightshift-sim-{secrets.token_hex(4)}.timer"
     if not shutil.which("systemd-run"):
         return _record("T1053.006", "skipped", started, "systemd-run is not installed",
-                       marker=unit, variant="transient")
+                       marker=unit, variant="transient",
+                       expected_rules=["transient-unit-started"])
     try:
         runner(["systemd-run", "--user", "--on-active=1", f"--unit={unit}", "true"])
         # Cleanup is part of the simulation: nothing may outlive the run.
@@ -113,6 +114,7 @@ def inject_timer(runner=_run) -> dict:
         return _record("T1053.006", "skipped", started, str(exc), marker=unit,
                        variant="transient")
     return _record("T1053.006", "ran", started, marker=unit, variant="transient",
+                   expected_rules=["transient-unit-started"],
                    note="transient timer; reset with systemctl --user reset-failed")
 
 
@@ -147,12 +149,13 @@ def inject_timer_unit(runner=_run, sleeper=time.sleep, unit_dir: Path | None = N
             reason = (proc.stderr or proc.stdout or "").strip()
             return _record("T1053.006", "failed", started,
                            reason or f"systemctl exit {proc.returncode}",
-                           marker=f"{name}.timer", variant="unit-file")
+                           marker=f"{name}.timer", variant="unit-file",
+                           expected_rules=["timer-unit-introduced"])
         sleeper(2.5)                    # OnActiveSec=1, plus room to land
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _record("T1053.006", "skipped", started,
                        f"{type(exc).__name__}: {exc}", marker=f"{name}.timer",
-                       variant="unit-file")
+                       variant="unit-file", expected_rules=["timer-unit-introduced"])
     finally:
         for argv in (["systemctl", "--user", "stop", f"{name}.timer"],
                      ["systemctl", "--user", "reset-failed", f"{name}.service"],
@@ -168,6 +171,7 @@ def inject_timer_unit(runner=_run, sleeper=time.sleep, unit_dir: Path | None = N
                 continue
     return _record("T1053.006", "ran", started, marker=f"{name}.timer",
                    variant="unit-file",
+                   expected_rules=["timer-unit-introduced"],
                    note="timer unit pair removed; daemon reloaded")
 
 

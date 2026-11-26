@@ -19,12 +19,13 @@ appear.
 
 - **2 of 2 injection variants across 1 technique** were caught in the last run of
   `nightshift demo`; both timer rules are also pinned by checked-in journal fixtures.
-- MTTD **6.8 s**, injection start to the scan that caught it, including the gap
+- MTTD **6.1 s**, injection start to the scan that caught it, including the gap
   between `collect` and `scan`; the first journal evidence landed at **1.0 s**.
 - Precision **100%**, 0 false positives. Detections from outside the injection
   window are listed as out of scope or as repeats, never counted as catches.
-- Each variant is credited to the rule that caught it: `transient-unit-started`
-  for the transient timer, `timer-unit-introduced` for the on-disk pair.
+- Each variant is credited **only** to its designated rule: `transient-unit-started`
+  for the transient timer, `timer-unit-introduced` for the on-disk pair. A detection
+  of the right technique from any other rule is a repeat, never a catch.
 - What it cannot see: T1046 and T1105 leave no journald telemetry, T1548.003
   needs a password to log, and auditd needs root — all reported, none scored as a miss.
 
@@ -211,9 +212,10 @@ different fixes.
 ```
 TECH      VISIBILITY     INJECTED  CAUGHT  MISSED     MTTD  EVIDENCE
 T1046     no-telemetry          0       0       0        —         —   not scored: no telemetry
-T1053.006 observed              2       2       0     6.8s      1.0s
+T1053.006 observed              2       2       0     6.1s      1.0s
 T1105     no-telemetry          0       0       0        —         —   not scored: no telemetry
 T1548.003 observed              0       0       0        —         —   not scored: nothing observed
+(only detections from a variant's designated rule count; the rest are repeats)
 T1053.006 variants: transient 1/1 (transient-unit-started), unit-file 1/1 (timer-unit-introduced)
 
 recall     100%  (2 caught, 0 missed, 1 scored technique(s))
@@ -259,6 +261,12 @@ just outside the arithmetic they do not belong in.
   duplicate. A blind spot has no telemetry and an unobserved run produced
   nothing, so neither has a catch to duplicate: a detection of either stays a
   false positive.
+* **A variant counts only its designated rule.** Each injection record carries
+  `expected_rules`; scoring skips a same-technique detection from any other
+  rule, which then lands in the repeat bucket. This is what stops "both variants
+  caught" from being true while one of the two rules is dead and the other one
+  fires on both lines: with `timer-unit-introduced` deleted, the mutation test
+  against the real fixture reports `unit-file 0/1` and one missed, not 2/2.
 * **Any other detection that lines up with no injection is a false positive** —
   even if it looks plausible, even if it was a real event on the host, and
   including a plausible detection of the wrong technique inside the window.
