@@ -1,5 +1,6 @@
 """The export is only shareable if the machine it came from cannot be named."""
 import getpass
+import hashlib
 import json
 import platform
 import re
@@ -357,6 +358,56 @@ class OneSessionTest(unittest.TestCase):
         doc = export(events, [])
         self.assertEqual(doc["events"], [])
         self.assertEqual(doc["excluded"]["outside_session"], len(events))
+
+
+class LevelSizeTest(unittest.TestCase):
+    """A level is small enough to work, but never small enough to hide the attack."""
+
+    def required(self):
+        events, truth = playable()
+        doc = export(events, truth, max_events=100)
+        return events, truth, [item for item in doc["events"] if item["label"] != "benign"]
+
+    def test_n_cannot_be_smaller_than_the_attack_set(self):
+        events, truth, required = self.required()
+        self.assertEqual(len(required), 5)
+        with self.assertRaises(ValueError):
+            export(events, truth, max_events=len(required) - 1)
+        doc = export(events, truth, max_events=len(required))
+        self.assertEqual(len(doc["events"]), len(required))
+        self.assertEqual({item["label"] for item in doc["events"]}, {"attack_evidence", "side_effect"})
+
+    def test_background_is_filled_nearest_the_attacks_first(self):
+        events, truth, required = self.required()
+        noise = [
+            event(id="far", ts="2026-11-26T10:02:02.000000Z", event_type="auth_failure",
+                  source="su", message="FAILED su for root by analyst"),
+            event(id="near", ts="2026-11-26T10:01:03.000000Z", event_type="auth_failure",
+                  source="su", message="FAILED su for root by analyst"),
+        ]
+        # e6 sits closest to the second run; the nearby noise line is next.
+        doc = export(events, truth, noise=noise, max_events=len(required) + 2)
+        benign = [item["id"] for item in doc["events"] if item["label"] == "benign"]
+        self.assertEqual(sorted(benign), ["e6", "near"])
+        self.assertNotIn("far", {item["id"] for item in doc["events"]})
+        times = [item["ts"] for item in doc["events"]]
+        self.assertEqual(times, sorted(times))
+
+    def test_the_seed_breaks_distance_ties_reproducibly(self):
+        events, truth, required = self.required()
+        noise = [event(id=f"tie{index}", ts="2026-11-26T10:00:10.000000Z",
+                       event_type="auth_failure", source="su",
+                       message="FAILED su for root by analyst")
+                 for index in range(6)]
+        slots = len(required) + 4       # two in-window lines, then two ties
+        first = export(events, truth, noise=noise, max_events=slots, seed=7)
+        again = export(events, truth, noise=noise, max_events=slots, seed=7)
+        self.assertEqual(first["events"], again["events"])
+        chosen = [item["id"] for item in first["events"]
+                  if item["label"] == "benign" and item["id"] not in {"e4", "e6"}]
+        expected = sorted(noise, key=lambda item: hashlib.sha256(
+            f"7:{item['id']}".encode()).hexdigest())[:2]
+        self.assertEqual(sorted(chosen), sorted(item["id"] for item in expected))
 
 
 class ExampleLeakSweepTest(unittest.TestCase):

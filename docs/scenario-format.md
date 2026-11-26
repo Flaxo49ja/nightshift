@@ -7,7 +7,8 @@ exercise.
 ```fish
 nightshift export-scenario --state-dir ~/.local/share/nightshift \
                            --out my-scenario.json --lang en \
-                           [--noise quiet-day/events.jsonl]
+                           [--noise quiet-day/events.jsonl] \
+                           [--max-events 20] [--seed 0]
 ```
 
 `--lang` is `en` or `pt`; only `teach` and `limits` change with it. `--noise`
@@ -42,6 +43,16 @@ truth record can own (a timer from an earlier run, a stale
 `Started [systemd-run] …`) is dropped and counted in `excluded.untied_injector`;
 events outside the window are counted in `excluded.outside_session`. With no
 truth there is no session, so the export is background only.
+
+## Sizing the level
+
+`--max-events` (default 20) is the total number of events. Every
+`attack_evidence` and `side_effect` event is kept; if `N` is smaller than that
+set, the export fails with an error instead of silently dropping the attack.
+The remaining slots are filled with allowlisted background, nearest the
+truth windows first. Where two candidates are equally near, `--seed` decides
+(sha256 of seed and event id), so a level is reproducible without depending on
+store order. The result is still sorted by time.
 
 Background is a closed list, whether it comes from the session window or
 `--noise`: systemd unit start/stop/timer lines that name a unit, sudo/su/auth

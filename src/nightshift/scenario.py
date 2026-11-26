@@ -46,9 +46,6 @@ DOC_MAC = "00:00:5e:00:53:"
 # A scenario is one session, not one store. Evidence and its context come from
 # the truth window plus a minute of padding; anything older is another run.
 SESSION_PAD = 60
-# Background from the session window is a slice, not a dump: the store can
-# contain an hour of unrelated activity around two seconds of injection.
-MAX_WINDOW_BACKGROUND = 40
 
 # Fixed aliases, assigned in sorted order of the injector names a scenario
 # contains. Keeping the list short and boring is the point; a reader should not
@@ -359,9 +356,21 @@ def scenario_id(events: list[dict], truth: list[dict]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
+def _background_rank(event: dict, required: list[dict], seed: int):
+    """Nearest the attacks first; the seed settles what distance cannot."""
+    moment = parse_ts(event["ts"])
+    distance = 0.0
+    if required:
+        distance = min(abs((moment - parse_ts(item["ts"])).total_seconds())
+                       for item in required)
+    tie = hashlib.sha256(f"{seed}:{event['id']}".encode()).hexdigest()
+    return (distance, tie, event["ts"], event["id"])
+
+
 def export(events: list[dict], truth: list[dict], lang: str = "en",
            sanitizer: Sanitizer | None = None, detections=None,
-           noise: list[dict] | None = None, rules=None) -> dict:
+           noise: list[dict] | None = None, rules=None,
+           max_events: int = 20, seed: int = 0) -> dict:
     """Build the scenario document. Pure: same input, same id, no clock."""
     if lang not in TEACH:
         raise ValueError(f"unknown language {lang!r} (choose from {', '.join(TEACH)})")
@@ -385,18 +394,22 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
     dropped = {event["id"] for event in untied}
     labelled = [event for event in labelled if event["id"] not in dropped]
 
-    # Only an allowlisted slice of in-window background: nearest-first is
-    # Task N's job, but even now the window may hold an hour of host life.
+    # Background is allowlisted first, then sized: evidence and side effects
+    # are never traded away for scenery.
     benign = [event for event in labelled if event["label"] == "benign"]
     allowed = [event for event in benign if allow_benign(event)]
     not_allowed = len(benign) - len(allowed)
-    keep = {event["id"] for event in allowed[:MAX_WINDOW_BACKGROUND]}
-    labelled = [event for event in labelled
-                if event["label"] != "benign" or event["id"] in keep]
-
     quiet = [{**event, "label": "benign"} for event in (noise or [])
              if allow_benign(event)]
-    mixed = labelled + quiet
+    required = [event for event in labelled if event["label"] != "benign"]
+    if max_events < len(required):
+        raise ValueError(
+            f"--max-events {max_events} is smaller than the {len(required)} "
+            "attack and side-effect events this session contains")
+    candidates = allowed + quiet
+    slots = max_events - len(required)
+    chosen = sorted(candidates, key=lambda event: _background_rank(event, required, seed))[:slots]
+    mixed = required + [{**event, "label": "benign"} for event in chosen]
     mixed.sort(key=lambda event: event["ts"])
 
     clean_events = [_rename(cleaner.document(event), mapping) for event in mixed]

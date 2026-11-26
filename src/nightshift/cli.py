@@ -130,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
                             help="events.jsonl from a separate quiet collection, "
                                  "mixed in as benign background")
     export_cmd.add_argument("--rules", type=Path, default=default_rules_dir())
+    export_cmd.add_argument("--max-events", type=int, default=20,
+                            help="total events to keep, evidence and side effects "
+                                 "always included (default 20)")
+    export_cmd.add_argument("--seed", type=int, default=0,
+                            help="breaks distance ties among background events (default 0)")
 
     baseline_cmd = sub.add_parser("baseline",
                                   help="alerts per hour per rule, with no injections")
@@ -364,7 +369,8 @@ def export_scenario(args) -> int:
     noise = read_jsonl(args.noise) if args.noise else []
     document = export_scenario_doc(events, truth, lang=args.lang,
                                    detections=detections, noise=noise,
-                                   rules=load_rules(args.rules))
+                                   rules=load_rules(args.rules),
+                                   max_events=args.max_events, seed=args.seed)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")
