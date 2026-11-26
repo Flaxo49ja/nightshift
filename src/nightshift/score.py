@@ -150,15 +150,21 @@ def score(truth: list[dict], detections: list[dict],
         bucket = variants.setdefault((technique, str(item.get("variant") or "default")),
                                      {"injected": 0, "caught": 0, "rules": []})
         bucket["injected"] += 1
+        started = parse_ts(item["started"])
         for detection in detections:
             if detection.get("technique") != technique or detection["id"] in matched:
+                continue
+            # Slack exists for asynchronous journal writes, not for evidence
+            # that predates the injection it is supposed to explain. Without
+            # this, a probe run minutes earlier is credited as this catch and
+            # MTTD goes negative.
+            if parse_ts(detection["ts_first"]) < started:
                 continue
             if _overlaps(detection, item):
                 matched.add(detection["id"])
                 row.detected += 1
                 bucket["caught"] += 1
                 bucket["rules"].append(detection["rule_id"])
-                started = parse_ts(item["started"])
                 evidence.setdefault(technique, []).append(
                     (parse_ts(detection["ts_first"]) - started).total_seconds())
                 # No detected_at means an old detection file; MTTD stays

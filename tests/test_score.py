@@ -149,6 +149,25 @@ class VariantTest(unittest.TestCase):
         self.assertEqual(card.variants[("T1053.006", "unit-file")]["caught"], 0)
 
 
+class NoCatchBeforeTheFactTest(unittest.TestCase):
+    """Slack is for journald's write latency, not for time travel."""
+
+    def test_a_detection_older_than_the_injection_is_not_its_catch(self):
+        card = score([truth("T1110.001", started="2026-10-30T20:04:00.000000Z")],
+                     [detection("T1110.001", ts_first="2026-10-30T19:59:30.000000Z",
+                                detected_at="2026-10-30T19:59:31.000000Z")])
+        self.assertEqual(card.true_positives, 0)
+        self.assertEqual(len(card.repeats), 1)
+        self.assertEqual(len(card.false_positives), 0)
+
+    def test_mttd_can_never_be_negative(self):
+        card = score([truth("T1110.001", started="2026-10-30T20:04:00.000000Z")],
+                     [detection("T1110.001", ts_first="2026-10-30T20:04:00.500000Z",
+                                detected_at="2026-10-30T20:04:01.000000Z")])
+        self.assertGreaterEqual(card.rows[0].mttd, 0)
+        self.assertGreaterEqual(card.rows[0].time_to_evidence, 0)
+
+
 class TimeToDetectTest(unittest.TestCase):
     """MTTD is injection to *scan*, which is the number an alert pipeline is
     judged on. Evidence time is the journal line to the scan and is faster by

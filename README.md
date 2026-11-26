@@ -15,6 +15,19 @@ New here? **[TEACH.md](TEACH.md)** is a ten-minute copy-paste lab: look at your 
 host, run the ground-truth loop, then move a rule threshold and watch the noise
 appear.
 
+## Results
+
+- **2 of 2 injection variants across 1 technique** were caught in the last run of
+  `nightshift demo`; both timer rules are also pinned by checked-in journal fixtures.
+- MTTD **6.8 s**, injection start to the scan that caught it, including the gap
+  between `collect` and `scan`; the first journal evidence landed at **1.0 s**.
+- Precision **100%**, 0 false positives. Detections from outside the injection
+  window are listed as out of scope or as repeats, never counted as catches.
+- Each variant is credited to the rule that caught it: `transient-unit-started`
+  for the transient timer, `timer-unit-introduced` for the on-disk pair.
+- What it cannot see: T1046 and T1105 leave no journald telemetry, T1548.003
+  needs a password to log, and auditd needs root — all reported, none scored as a miss.
+
 ## Why this shape
 
 Most "SOC projects" end up teaching you to install a SIEM. The daily work is
@@ -189,24 +202,24 @@ different fixes.
 ## The scorecard
 
 ```
-TECH      VISIBILITY     INJECTED  CAUGHT  MISSED
-T1046     no-telemetry          0       0       0   not scored: no telemetry
-T1053.006 observed              1       1       0
-T1105     no-telemetry          0       0       0   not scored: no telemetry
-T1548.003 observed              0       0       0   not scored: nothing observed
+TECH      VISIBILITY     INJECTED  CAUGHT  MISSED     MTTD  EVIDENCE
+T1046     no-telemetry          0       0       0        —         —   not scored: no telemetry
+T1053.006 observed              2       2       0     6.8s      1.0s
+T1105     no-telemetry          0       0       0        —         —   not scored: no telemetry
+T1548.003 observed              0       0       0        —         —   not scored: nothing observed
+T1053.006 variants: transient 1/1 (transient-unit-started), unit-file 1/1 (timer-unit-introduced)
 
-recall     100%  (1 caught, 0 missed, 1 scored technique(s))
+recall     100%  (2 caught, 0 missed, 1 scored technique(s))
 precision  100%  (0 false positive(s))
 no telemetry, not a miss: T1046 (no-telemetry), T1105 (no-telemetry)
 ran but recorded nothing (simulation limit, not a detection miss): T1548.003
 
-out of scope, not counted: 2 before the injection window
-  2026-11-25T16:24:03.360592Z  transient-unit-started  key=None
-  2026-11-25T16:24:03.430574Z  transient-unit-started  key=None
+out of scope, not counted: 26 before the injection window; 4 same technique already caught in the window
+  (each listed with timestamp and rule; trimmed here)
 ```
 
-That last block is the fix. The same events, scored against the same truth by
-the previous version, read `precision 33% (2 false positive(s))`: the two
+That last part is the fix. The same events, scored against the same truth by
+the previous version, read `precision 33% (2 false positive(s))`: those
 detections were `systemd-run` probes I ran five minutes before the injection,
 and they were being averaged into an experiment that never observed them. Both
 readings are in the test suite (`tests/test_score.py`, `session_window`), and
