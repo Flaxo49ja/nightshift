@@ -338,3 +338,12 @@ scorecard's honesty rules, and one end-to-end shift over the fixtures.
   windows counts as false positive by design, so scores are meaningful per run,
   not across a shared timeline.
 - One machine, one vantage point. This teaches triage, not detection at scale.
+- A paired timer run always logs **two** `Started [systemd-run]` lines, and the
+  second is not a duplicate: the transient timer and its service share one
+  Description, so arming the timer and running the service look identical. The
+  unit-file injector's `daemon-reload` defers the pending transient service onto
+  the unit-file timer start, which is why the second line lands there; tightening
+  AccuracySec to 100 ms moves it 1.1 s before the unit-file service but not away
+  from the timer line. Measurements and the controlled check are in
+  [docs/timer-journal-timing.md](docs/timer-journal-timing.md). The extra
+  detection is scored as a repeat, never a catch.
