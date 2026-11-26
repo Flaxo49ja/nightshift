@@ -76,6 +76,7 @@ nightshift shift                   # work the triage queue
 nightshift inject                  # run safe simulations, record ground truth
 nightshift score                   # detections vs ground truth
 nightshift coverage                # ATT&CK visibility report
+nightshift baseline --hours 24     # alerts per hour per rule, no injections
 nightshift export-scenario --out scenario.json   # sanitized, scoreable exercise
 ```
 
@@ -270,6 +271,14 @@ just outside the arithmetic they do not belong in.
 * **Any other detection that lines up with no injection is a false positive** —
   even if it looks plausible, even if it was a real event on the host, and
   including a plausible detection of the wrong technique inside the window.
+
+`nightshift baseline --hours 24` answers the other half of the question: it
+applies the same rules to a store with no injections and prints alerts per hour
+per rule. Use a quiet day collected separately from any injection session — an
+injection inside the window is noise, and the report says so. It reports the
+last N hours *of the store*, ending at the newest event, so an old collection
+still describes the day it came from. No baseline number is published here yet:
+the one real day collected so far was after manual probes, not a quiet one.
 
 ## What journald cannot see, and auditd can
 

@@ -20,6 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import inject as inject_mod
+from .baseline import measure as measure_baseline
+from .baseline import render as render_baseline
 from .coverage import observed as observed_techniques
 from .cursor import Cursor, CursorFile
 from .providers.base import CursorInvalid
@@ -124,6 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument("--out", type=Path, required=True,
                             help="scenario JSON to write")
     export_cmd.add_argument("--lang", choices=("en", "pt"), default="en")
+
+    baseline_cmd = sub.add_parser("baseline",
+                                  help="alerts per hour per rule, with no injections")
+    baseline_cmd.add_argument("--state-dir", type=Path, default=default_state_dir())
+    baseline_cmd.add_argument("--hours", type=float, default=24.0,
+                              help="window to measure, ending at the newest event (default 24)")
+    baseline_cmd.add_argument("--rules", type=Path, default=default_rules_dir())
 
     coverage_cmd = sub.add_parser("coverage", help="ATT&CK visibility report")
     coverage_cmd.add_argument("--provider", choices=("journald", "auditd"), default="journald")
@@ -396,6 +405,16 @@ def demo(args) -> int:
     return 0
 
 
+def baseline(args) -> int:
+    events = read_jsonl(args.state_dir / "events.jsonl")
+    if not events:
+        print(f"error: no events in {args.state_dir} — run `nightshift collect` first",
+              file=sys.stderr)
+        return 1
+    print(render_baseline(measure_baseline(events, load_rules(args.rules), args.hours)))
+    return 0
+
+
 def coverage(args) -> int:
     techniques = set()
     try:
@@ -425,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
             return export_scenario(args)
         if args.command == "demo":
             return demo(args)
+        if args.command == "baseline":
+            return baseline(args)
         if args.command == "coverage":
             return coverage(args)
     except ValueError as exc:          # bad --since, unknown technique
