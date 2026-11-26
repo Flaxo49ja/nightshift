@@ -67,8 +67,10 @@ class Scorecard:
     out_of_session: list[dict] = field(default_factory=list)
     repeats: list[dict] = field(default_factory=list)
     window: tuple[datetime, datetime] | None = None
-    # (technique, variant) -> {"injected": n, "caught": n}. Two variants of
-    # one technique stay one technique; this only says which shape was caught.
+    # (technique, variant) -> {"injected": n, "caught": n, "rules": [...]}. Two
+    # variants of one technique stay one technique; this says which shape was
+    # caught and by which rule, so "the rule works" cannot mean "one of the
+    # rules happens to fire".
     variants: dict[tuple[str, str], dict] = field(default_factory=dict)
 
     @property
@@ -146,7 +148,7 @@ def score(truth: list[dict], detections: list[dict],
             continue
         row.injected += 1
         bucket = variants.setdefault((technique, str(item.get("variant") or "default")),
-                                     {"injected": 0, "caught": 0})
+                                     {"injected": 0, "caught": 0, "rules": []})
         bucket["injected"] += 1
         for detection in detections:
             if detection.get("technique") != technique or detection["id"] in matched:
@@ -155,6 +157,7 @@ def score(truth: list[dict], detections: list[dict],
                 matched.add(detection["id"])
                 row.detected += 1
                 bucket["caught"] += 1
+                bucket["rules"].append(detection["rule_id"])
                 started = parse_ts(item["started"])
                 evidence.setdefault(technique, []).append(
                     (parse_ts(detection["ts_first"]) - started).total_seconds())
@@ -220,6 +223,8 @@ def render(card: Scorecard, provider: str = "journald") -> str:
     for technique, parts in sorted(per_technique.items()):
         if len(parts) > 1:
             detail = ", ".join(f"{variant} {counts['caught']}/{counts['injected']}"
+                               + (f" ({', '.join(sorted(set(counts['rules']))) })"
+                                  if counts.get("rules") else "")
                                for variant, counts in sorted(parts))
             lines.append(f"  {technique} variants: {detail}")
 

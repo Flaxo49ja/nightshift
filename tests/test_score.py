@@ -119,18 +119,34 @@ class VariantTest(unittest.TestCase):
         ])
         self.assertEqual(card.rows[0].injected, 2)
         self.assertEqual(card.variants[("T1053.006", "transient")],
-                         {"injected": 1, "caught": 1})
+                         {"injected": 1, "caught": 1, "rules": ["r1"]})
         self.assertEqual(card.variants[("T1053.006", "unit-file")],
-                         {"injected": 1, "caught": 1})
+                         {"injected": 1, "caught": 1, "rules": ["r1"]})
         self.assertIn("transient 1/1", render(card))
         self.assertIn("unit-file 1/1", render(card))
 
+    def test_each_variant_names_the_rule_that_caught_it(self):
+        card = score([
+            truth("T1053.006", observed=1, variant="transient"),
+            truth("T1053.006", started="2026-10-30T20:10:00.000000Z",
+                  ended="2026-10-30T20:11:00.000000Z", observed=1, variant="unit-file"),
+        ], [
+            detection("T1053.006", ident="a", rule="transient-unit-started"),
+            detection("T1053.006", ident="b", rule="timer-unit-introduced",
+                      ts_first="2026-10-30T20:10:11.000000Z"),
+        ])
+        self.assertEqual(card.variants[("T1053.006", "transient")]["rules"],
+                         ["transient-unit-started"])
+        self.assertEqual(card.variants[("T1053.006", "unit-file")]["rules"],
+                         ["timer-unit-introduced"])
+        text = render(card)
+        self.assertIn("transient 1/1 (transient-unit-started)", text)
+        self.assertIn("unit-file 1/1 (timer-unit-introduced)", text)
+
     def test_a_variant_that_was_not_caught_reads_zero(self):
         card = self.two_variants([detection("T1053.006", ident="only")])
-        self.assertEqual(card.variants[("T1053.006", "transient")],
-                         {"injected": 1, "caught": 1})
-        self.assertEqual(card.variants[("T1053.006", "unit-file")],
-                         {"injected": 1, "caught": 0})
+        self.assertEqual(card.variants[("T1053.006", "transient")]["caught"], 1)
+        self.assertEqual(card.variants[("T1053.006", "unit-file")]["caught"], 0)
 
 
 class TimeToDetectTest(unittest.TestCase):

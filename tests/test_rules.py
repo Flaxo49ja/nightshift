@@ -66,6 +66,31 @@ class DetectedAtTest(unittest.TestCase):
             self.assertGreaterEqual(parse_ts(item["detected_at"]), parse_ts(item["ts_first"]))
 
 
+class VariantAttributionTest(unittest.TestCase):
+    """Each rule must own one variant. A rule that also fires on the other
+    variant would let "both variants caught" be true while one rule is dead."""
+
+    def setUp(self):
+        self.rules = load_rules(ROOT / "rules")
+        self.events = normalize_fixture("timer_variants.jsonl")
+
+    def test_the_two_rules_split_the_two_variants(self):
+        fired = {d["rule_id"] for d in evaluate(self.events, self.rules)}
+        self.assertEqual(fired, {"transient-unit-started", "timer-unit-introduced"})
+
+    def test_the_on_disk_timer_is_only_the_timer_rule(self):
+        timer_line = next(e for e in self.events
+                          if e["event_type"] == "timer_run" and (e["unit"] or "").endswith(".timer"))
+        self.assertEqual({r.id for r in self.rules if matches(r.when, timer_line)},
+                         {"timer-unit-introduced"})
+
+    def test_the_on_disk_service_line_is_not_transient_evidence(self):
+        service_line = next(e for e in self.events
+                            if e["event_type"] == "service_start"
+                            and e["message"].startswith("Starting nightshift"))
+        self.assertEqual({r.id for r in self.rules if matches(r.when, service_line)}, set())
+
+
 class RuleHashTest(unittest.TestCase):
     """A detection without the rule text that produced it cannot be reviewed
     a week later, when the rule has changed."""
