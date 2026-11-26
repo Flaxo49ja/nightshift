@@ -40,6 +40,13 @@ IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4}(?![\w:])")
 DOC_NET = "192.0.2."
 
+# A scenario is one session, not one store. Evidence and its context come from
+# the truth window plus a minute of padding; anything older is another run.
+SESSION_PAD = 60
+# Background from the session window is a slice, not a dump: the store can
+# contain an hour of unrelated activity around two seconds of injection.
+MAX_WINDOW_BACKGROUND = 40
+
 # Fixed aliases, assigned in sorted order of the injector names a scenario
 # contains. Keeping the list short and boring is the point; a reader should not
 # be able to tell this was a practice range from the unit names.
@@ -197,6 +204,24 @@ def _rename(value, mapping: dict[str, str]):
     return value
 
 
+def session_bounds(truth: list[dict]):
+    """Earliest started minus padding through latest ended plus padding."""
+    if not truth:
+        return None
+    starts = [parse_ts(record["started"]) for record in truth]
+    ends = [parse_ts(record["ended"]) for record in truth]
+    return min(starts) - timedelta(seconds=SESSION_PAD), max(ends) + timedelta(seconds=SESSION_PAD)
+
+
+def _injector_shaped(event: dict) -> bool:
+    """A line only this range's injectors write, used for leftovers from
+    another run that no truth record in this scenario can own."""
+    message = (event.get("message") or "").lower()
+    unit = (event.get("unit") or "").lower()
+    return ("systemd-run" in message or "nightshift-" in message
+            or "nightshift simulated" in message or unit.startswith("nightshift"))
+
+
 def _in_window(event: dict, record: dict) -> bool:
     start = parse_ts(record["started"])
     end = parse_ts(record["ended"]) + timedelta(seconds=OBSERVATION_GRACE)
@@ -295,8 +320,30 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
     cleaner = sanitizer or Sanitizer()
     mapping = alias_map(events, truth)
 
-    labelled, records, side_effect_ids = label(events, truth)
+    bounds = session_bounds(truth)
+    if bounds is None:
+        in_session, outside = [], len(events)
+    else:
+        start, end = bounds
+        in_session = [event for event in events
+                      if start <= parse_ts(event["ts"]) <= end]
+        outside = len(events) - len(in_session)
+
+    labelled, records, side_effect_ids = label(in_session, truth)
     records = [dict(record) for record in records]
+    untied = [event for event in labelled
+              if event["label"] == "benign" and _injector_shaped(event)
+              and not any(_in_window(event, record) for record in truth)]
+    dropped = {event["id"] for event in untied}
+    labelled = [event for event in labelled if event["id"] not in dropped]
+
+    # Only a small slice of in-window background: nearest-first is Task N's
+    # job, but even now the window may hold an hour of unrelated host life.
+    benign = [event for event in labelled if event["label"] == "benign"]
+    keep = {event["id"] for event in benign[:MAX_WINDOW_BACKGROUND]}
+    labelled = [event for event in labelled
+                if event["label"] != "benign" or event["id"] in keep]
+
     mixed = labelled + [{**event, "label": "benign"} for event in (noise or [])]
     mixed.sort(key=lambda event: event["ts"])
 
@@ -310,6 +357,7 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
         "events": clean_events,
         "truth": clean_truth,
         "side_effect_ids": side_effect_ids,
+        "excluded": {"outside_session": outside, "untied_injector": len(dropped)},
         "teach": teach,
         "limits": LIMITS[lang],
     }

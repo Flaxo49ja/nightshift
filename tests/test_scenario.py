@@ -89,7 +89,7 @@ class ExportTest(unittest.TestCase):
     def test_document_has_the_documented_shape(self):
         doc = export([event()], self.truth(), lang="en")
         self.assertEqual(set(doc), {"id", "lang", "events", "truth", "side_effect_ids",
-                                    "teach", "limits"})
+                                    "excluded", "teach", "limits"})
         self.assertEqual(doc["lang"], "en")
         self.assertEqual(doc["events"][0]["host"], "soc-lab")
         self.assertTrue(doc["teach"]["prompt"])
@@ -264,6 +264,56 @@ class PlayableScenarioTest(unittest.TestCase):
         self.assertIn("192.0.2.", first["message"])
         self.assertNotIn("10.9.8.7", json.dumps(doc))
         self.assertNotIn(socket.gethostname(), json.dumps(doc))
+
+
+class OneSessionTest(unittest.TestCase):
+    """A store can hold many runs. An export that includes the others is not a
+    scenario of this session, it is a dump with an answer key."""
+
+    def test_an_earlier_session_is_excluded_entirely(self):
+        earlier = [
+            event(id="old-inject", ts="2026-11-26T09:00:00.100000Z",
+                  message="Started [systemd-run] /usr/sbin/true."),
+            event(id="old-timer", ts="2026-11-26T09:00:01.000000Z",
+                  event_type="timer_run", unit="nightshift-old11111.timer",
+                  message="Started nightshift-old11111.timer."),
+        ]
+        events, truth = playable()
+        # The second session's truth is what is being exported; the store still
+        # holds the first session's events.
+        doc = export(earlier + events, truth)
+        ids = {item["id"] for item in doc["events"]}
+        self.assertNotIn("old-inject", ids)
+        self.assertNotIn("old-timer", ids)
+        self.assertEqual(doc["excluded"]["outside_session"], 2)
+        self.assertTrue({item["id"] for item in doc["events"]}
+                        <= {e["id"] for e in events})
+
+    def test_a_leftover_injector_line_inside_the_window_is_dropped_and_counted(self):
+        events, truth = playable()
+        leftover = event(id="leftover", ts="2026-11-26T09:59:30.000000Z",
+                         message="Started [systemd-run] /usr/sbin/true.")
+        doc = export(events + [leftover], truth)
+        self.assertNotIn("leftover", {item["id"] for item in doc["events"]})
+        self.assertEqual(doc["excluded"]["untied_injector"], 1)
+        self.assertEqual(doc["excluded"]["outside_session"], 0)
+
+    def test_labels_and_observed_match_only_this_sessions_truth(self):
+        events, truth = playable()
+        doc = export(events, truth)
+        attack = {item["id"] for item in doc["events"]
+                  if item["label"] == "attack_evidence"}
+        owned = {event_id for record in doc["truth"]
+                 for event_id in record["event_ids"]}
+        self.assertEqual(attack, owned)
+        for record in doc["truth"]:
+            self.assertEqual(record["observed"], len(record["event_ids"]))
+
+    def test_without_truth_there_is_no_session_to_export(self):
+        events, _ = playable()
+        doc = export(events, [])
+        self.assertEqual(doc["events"], [])
+        self.assertEqual(doc["excluded"]["outside_session"], len(events))
 
 
 class FixtureIdentifierTest(unittest.TestCase):

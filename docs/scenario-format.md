@@ -25,12 +25,26 @@ A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-t
 | `events` | array | Labelled events, sorted by timestamp. |
 | `truth` | array | Ground-truth records. **This is the answer key.** |
 | `side_effect_ids` | array | Event ids caused by the injector's own reloads. |
+| `excluded` | object | `outside_session` and `untied_injector` counts: what was left out, and why. |
 | `teach` | object | `title`, `prompt`, `hints[]`, and `techniques[]` (see below). |
 | `limits` | array | What the scenario is not. |
 
 `truth` is deliberately in the same file: a scenario that needs two files gets
 separated, and one without truth cannot be scored. It also means you should not
 hand an exported scenario to someone before the exercise.
+
+## One session per scenario
+
+A store holds every run it ever saw. The export contains only the session the
+truth describes: events from `earliest truth.started − 60 s` to
+`latest truth.ended + 60 s`. An injector-shaped line inside that window that no
+truth record can own (a timer from an earlier run, a stale
+`Started [systemd-run] …`) is dropped and counted in `excluded.untied_injector`;
+events outside the window are counted in `excluded.outside_session`. With no
+truth there is no session, so the export is background only.
+
+Background from the session window is capped; `--noise` is the way to add a
+real quiet day.
 
 ## Events
 

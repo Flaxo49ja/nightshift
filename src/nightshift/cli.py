@@ -371,6 +371,9 @@ def export_scenario(args) -> int:
     print(f"nightshift export-scenario — {len(document['events'])} event(s), "
           f"{len(document['truth'])} truth record(s)")
     print(f"  id {document['id']}  lang {document['lang']}")
+    excluded = document["excluded"]
+    print(f"  excluded {excluded['outside_session']} event(s) outside this session, "
+          f"{excluded['untied_injector']} untied injector line(s)")
     print(f"  written to {args.out}")
     return 0
 
