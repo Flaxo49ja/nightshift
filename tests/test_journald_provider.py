@@ -55,7 +55,7 @@ class ClassificationTest(unittest.TestCase):
         self.assertEqual(classify("systemd", message, "demo.service"), "service_failed")
 
     def test_ufw_block_from_the_kernel_is_a_firewall_block(self):
-        message = "[UFW BLOCK] IN=wlan0 OUT= MAC= SRC=192.168.0.112 DST=224.0.0.252 PROTO=UDP"
+        message = "[UFW BLOCK] IN=wlan0 OUT= MAC= SRC=192.0.2.112 DST=224.0.0.252 PROTO=UDP"
         self.assertEqual(classify("kernel", message, None), "firewall_block")
 
     def test_rate_limited_block_is_the_same_verdict(self):
@@ -160,15 +160,15 @@ class FieldExtractionTest(unittest.TestCase):
         self.assertEqual(self.provider.normalize(raw).unit, "init.scope")
 
     def test_firewall_block_peer_is_parsed_from_ufw_fields(self):
-        message = ("[UFW BLOCK] IN=wlan0 OUT= MAC= SRC=203.0.113.44 DST=192.168.0.10 "
+        message = ("[UFW BLOCK] IN=wlan0 OUT= MAC= SRC=203.0.113.44 DST=192.0.2.10 "
                    "PROTO=TCP SPT=40221 DPT=22")
         event = self.provider.normalize(self.entry(SYSLOG_IDENTIFIER="kernel", MESSAGE=message))
         self.assertEqual((event.src_ip, event.src_port), ("203.0.113.44", 40221))
 
     def test_ipv6_peer_survives_intact(self):
-        message = "[UFW BLOCK] IN=wlan0 OUT= SRC=fe80:0000:0000:0000:cb2b:404a:6dd0:8f6c PROTO=UDP SPT=5353"
+        message = "[UFW BLOCK] IN=wlan0 OUT= SRC=fe80::1 PROTO=UDP SPT=5353"
         event = self.provider.normalize(self.entry(SYSLOG_IDENTIFIER="kernel", MESSAGE=message))
-        self.assertEqual(event.src_ip, "fe80:0000:0000:0000:cb2b:404a:6dd0:8f6c")
+        self.assertEqual(event.src_ip, "fe80::1")
         self.assertEqual(event.src_port, 5353)
 
     def test_source_falls_back_to_comm(self):

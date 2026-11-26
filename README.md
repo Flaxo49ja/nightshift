@@ -75,7 +75,14 @@ nightshift shift                   # work the triage queue
 nightshift inject                  # run safe simulations, record ground truth
 nightshift score                   # detections vs ground truth
 nightshift coverage                # ATT&CK visibility report
+nightshift export-scenario --out scenario.json   # sanitized, scoreable exercise
 ```
+
+An export is one JSON file with the events, the answer key and the teaching
+text: [docs/scenario-format.md](docs/scenario-format.md), sample in
+[`examples/`](examples/). Hostnames, usernames, home paths and every IP are
+replaced before the file is written, and a test reads this machine's real
+identity to prove it.
 
 See it work before you trust it: `nightshift demo` runs the whole loop —
 collect, scan, inject, collect, scan, score — in a throwaway `/tmp` state dir and

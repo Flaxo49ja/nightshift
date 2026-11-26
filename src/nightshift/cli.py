@@ -27,6 +27,7 @@ from .providers.journald import DEFAULT_SOURCES, JournaldProvider
 from .queue import STATUSES, TriageQueue, resolve
 from .report import render as render_coverage
 from .rules import RuleError, evaluate, load_rules
+from .scenario import export as export_scenario_doc
 from .schema import parse_ts
 from .score import render as render_score
 from .score import score as score_detections
@@ -116,6 +117,13 @@ def build_parser() -> argparse.ArgumentParser:
     demo_cmd = sub.add_parser("demo", help="run the whole loop in a throwaway state dir")
     demo_cmd.add_argument("--since", default="1h",
                           help="first collect window (default: 1h)")
+
+    export_cmd = sub.add_parser("export-scenario",
+                                help="write a sanitized, self-contained scenario")
+    export_cmd.add_argument("--state-dir", type=Path, default=default_state_dir())
+    export_cmd.add_argument("--out", type=Path, required=True,
+                            help="scenario JSON to write")
+    export_cmd.add_argument("--lang", choices=("en", "pt"), default="en")
 
     coverage_cmd = sub.add_parser("coverage", help="ATT&CK visibility report")
     coverage_cmd.add_argument("--provider", choices=("journald", "auditd"), default="journald")
@@ -329,6 +337,27 @@ def score(args) -> int:
     return 0
 
 
+def export_scenario(args) -> int:
+    events = read_jsonl(args.state_dir / "events.jsonl")
+    truth = read_jsonl(args.state_dir / "truth.jsonl")
+    if not events:
+        print(f"error: no events in {args.state_dir} — run `nightshift collect` first",
+              file=sys.stderr)
+        return 1
+    if not truth:
+        print("warning: no ground truth — the export will have no answer key",
+              file=sys.stderr)
+    document = export_scenario_doc(events, truth, lang=args.lang)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+    print(f"nightshift export-scenario — {len(document['events'])} event(s), "
+          f"{len(document['truth'])} truth record(s)")
+    print(f"  id {document['id']}  lang {document['lang']}")
+    print(f"  written to {args.out}")
+    return 0
+
+
 def demo(args) -> int:
     """The shift, end to end, in a directory nobody cares about.
 
@@ -392,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
             return inject(args)
         if args.command == "score":
             return score(args)
+        if args.command == "export-scenario":
+            return export_scenario(args)
         if args.command == "demo":
             return demo(args)
         if args.command == "coverage":
