@@ -35,10 +35,13 @@ DOC_USER = "analyst"
 DOC_HOME = "/home/analyst"
 
 IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-# Loosely matched on purpose; `_scrub_v6` then rejects clock times. A time
-# like 05:04:11 has two colons and no `::`, an address does not.
+# Loosely matched on purpose; `_scrub_v6` then rejects clock times and MACs.
+# A time like 05:04:11 has two colons and no `::`; a MAC has five colons and
+# also no `::`, so both stay out of the address map.
 IPV6 = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4}(?![\w:])")
+MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
 DOC_NET = "192.0.2."
+DOC_MAC = "00:00:5e:00:53:"
 
 # A scenario is one session, not one store. Evidence and its context come from
 # the truth window plus a minute of padding; anything older is another run.
@@ -153,11 +156,18 @@ class Sanitizer:
                                  if u and len(u) > 2}, key=len, reverse=True)
         self.home = str(home or Path.home())
         self._ips: dict[str, str] = {}
+        self._macs: dict[str, str] = {}
 
     def address(self, ip: str) -> str:
         if ip not in self._ips:
             self._ips[ip] = f"{DOC_NET}{len(self._ips) + 1}"
         return self._ips[ip]
+
+    def mac(self, value: str) -> str:
+        key = value.lower()
+        if key not in self._macs:
+            self._macs[key] = f"{DOC_MAC}{len(self._macs) + 1:02x}"
+        return self._macs[key]
 
     def text(self, value: str) -> str:
         out = value.replace(self.home, DOC_HOME)
@@ -165,13 +175,18 @@ class Sanitizer:
             out = out.replace(name, DOC_HOST)
         for name in self.usernames:
             out = out.replace(name, DOC_USER)
+        # Before IPv4/IPv6: a MAC is six colon-separated hex pairs and would
+        # otherwise be read as a compressed IPv6 address.
+        out = MAC.sub(lambda m: self.mac(m.group()), out)
         out = IPV4.sub(lambda m: self.address(m.group()), out)
         return IPV6.sub(self._scrub_v6, out)
 
     def _scrub_v6(self, match: re.Match) -> str:
         token = match.group()
-        if "::" not in token and token.count(":") < 3:
-            return token            # a clock time, not an address
+        # A clock time has two colons, a MAC five with no `::`, IPv6 at least
+        # six (or a `::`). Rejecting by shape keeps MACs in the MAC namespace.
+        if "::" not in token and token.count(":") < 6:
+            return token
         return self.address(token)
 
     def document(self, value):
@@ -211,6 +226,39 @@ def session_bounds(truth: list[dict]):
     starts = [parse_ts(record["started"]) for record in truth]
     ends = [parse_ts(record["ended"]) for record in truth]
     return min(starts) - timedelta(seconds=SESSION_PAD), max(ends) + timedelta(seconds=SESSION_PAD)
+
+
+# Background is a closed list. Kernel chatter (hardware, suspend, ACPI) is
+# not background an analyst should learn from, and a service description can
+# name a person's files. A manager line qualifies by naming a unit, or by
+# describing a task without a path, home shortcut or "App - Window" shape.
+AUTH_TYPES = frozenset({"auth_success", "auth_failure", "sudo_command",
+                        "session_open", "session_close", "account_change"})
+UNIT_EVENT_TYPES = frozenset({"service_start", "service_stop", "service_failed",
+                              "timer_run", "cron_run"})
+UNIT_LINE = re.compile(r"\.(?:service|timer|socket|scope|target|mount|device|swap)\b")
+MANAGER_PREFIXES = ("starting ", "started ", "stopping ", "stopped ",
+                    "finished ", "failed ")
+PERSONAL = re.compile(r"[~/]| - ")
+
+
+def allow_benign(event: dict) -> bool:
+    """True only for the shapes a quiet-host corpus may contain."""
+    event_type = event.get("event_type")
+    if event_type == "firewall_block":
+        return True
+    if event_type in AUTH_TYPES:
+        return True
+    if event_type not in UNIT_EVENT_TYPES or event.get("source") == "kernel":
+        return False
+    message = (event.get("message") or "").strip()
+    if UNIT_LINE.search(message):
+        return True
+    lower = message.lower()
+    if lower.startswith(MANAGER_PREFIXES):
+        description = message.split(" ", 1)[1] if " " in message else ""
+        return not PERSONAL.search(description.rstrip("."))
+    return False
 
 
 def _injector_shaped(event: dict) -> bool:
@@ -337,14 +385,18 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
     dropped = {event["id"] for event in untied}
     labelled = [event for event in labelled if event["id"] not in dropped]
 
-    # Only a small slice of in-window background: nearest-first is Task N's
-    # job, but even now the window may hold an hour of unrelated host life.
+    # Only an allowlisted slice of in-window background: nearest-first is
+    # Task N's job, but even now the window may hold an hour of host life.
     benign = [event for event in labelled if event["label"] == "benign"]
-    keep = {event["id"] for event in benign[:MAX_WINDOW_BACKGROUND]}
+    allowed = [event for event in benign if allow_benign(event)]
+    not_allowed = len(benign) - len(allowed)
+    keep = {event["id"] for event in allowed[:MAX_WINDOW_BACKGROUND]}
     labelled = [event for event in labelled
                 if event["label"] != "benign" or event["id"] in keep]
 
-    mixed = labelled + [{**event, "label": "benign"} for event in (noise or [])]
+    quiet = [{**event, "label": "benign"} for event in (noise or [])
+             if allow_benign(event)]
+    mixed = labelled + quiet
     mixed.sort(key=lambda event: event["ts"])
 
     clean_events = [_rename(cleaner.document(event), mapping) for event in mixed]
@@ -357,7 +409,8 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
         "events": clean_events,
         "truth": clean_truth,
         "side_effect_ids": side_effect_ids,
-        "excluded": {"outside_session": outside, "untied_injector": len(dropped)},
+        "excluded": {"outside_session": outside, "untied_injector": len(dropped),
+                     "not_allowlisted": not_allowed},
         "teach": teach,
         "limits": LIMITS[lang],
     }

@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nightshift.scenario import DOC_HOST, DOC_USER, Sanitizer, export, scenario_id
+from nightshift.scenario import (DOC_HOST, DOC_MAC, DOC_USER, Sanitizer,
+                                  allow_benign, export, scenario_id)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -77,6 +78,18 @@ class SanitizerTest(unittest.TestCase):
         self.assertNotIn("fe80", text)
         self.assertNotIn("2001:db8", text)
         self.assertIn("192.0.2.", text)
+
+    def test_a_mac_gets_a_documentation_mac_not_an_ip(self):
+        cleaner = Sanitizer(hostname="box", username="user", home="/home/user")
+        text = cleaner.text("aa:bb:cc:dd:ee:ff and 11:22:33:44:55:66 and aa:bb:cc:dd:ee:ff")
+        self.assertEqual(text, f"{DOC_MAC}01 and {DOC_MAC}02 and {DOC_MAC}01")
+        self.assertNotIn("192.0.2.", text)
+
+    def test_the_ipv6_matcher_does_not_treat_a_mac_as_an_address(self):
+        cleaner = Sanitizer(hostname="box", username="user", home="/home/user")
+        self.assertEqual(cleaner._scrub_v6(re.match(
+            r"(?<![\w:])(?:[0-9a-fA-F]{0,4}:){2,}[0-9a-fA-F]{0,4}(?![\w:])",
+            "aa:bb:cc:dd:ee:ff")), "aa:bb:cc:dd:ee:ff")
 
 
 class ExportTest(unittest.TestCase):
@@ -253,7 +266,8 @@ class PlayableScenarioTest(unittest.TestCase):
     def test_noise_is_sanitized_ordered_and_benign(self):
         noise = [event(id="n1", ts="2026-11-26T09:59:00.000000Z",
                        host=socket.gethostname(), src_ip="10.9.8.7",
-                       message=f"from {socket.gethostname()} via 10.9.8.7")]
+                       source="sudo", event_type="sudo_command",
+                       message=f"analyst on {socket.gethostname()} ran /usr/bin/true from 10.9.8.7")]
         doc = export(self.events, self.truth, noise=noise)
         times = [item["ts"] for item in doc["events"]]
         self.assertEqual(times, sorted(times))
@@ -264,6 +278,35 @@ class PlayableScenarioTest(unittest.TestCase):
         self.assertIn("192.0.2.", first["message"])
         self.assertNotIn("10.9.8.7", json.dumps(doc))
         self.assertNotIn(socket.gethostname(), json.dumps(doc))
+
+
+class AllowlistTest(unittest.TestCase):
+    """Background is a closed list, not "whatever the host happened to log"."""
+
+    def test_the_allowed_shapes_are_kept(self):
+        kept = [
+            event(source="kernel", event_type="firewall_block",
+                  message="[UFW BLOCK] IN=wlan0 MAC=aa:bb:cc:dd:ee:ff"),
+            event(source="sudo", event_type="sudo_command",
+                  message="analyst ran /usr/bin/true"),
+            event(event_type="auth_failure", message="Failed password for analyst"),
+            event(event_type="timer_run", message="Started backup-sync.timer."),
+            event(event_type="service_stop", message="Stopped backup-sync.timer."),
+        ]
+        for item in kept:
+            self.assertTrue(allow_benign(item), item["message"])
+
+    def test_hardware_desktop_and_personal_lines_are_dropped(self):
+        dropped = [
+            event(source="kernel", event_type="unknown",
+                  message="Freezing user space processes"),
+            event(source="systemd-logind", event_type="unknown", message="Lid opened."),
+            event(message="Started Konsole - Terminal."),
+            event(message="Starting Auto-organize ~/Downloads into subfolders..."),
+            event(event_type="unknown", message="Reloading finished in 21 ms."),
+        ]
+        for item in dropped:
+            self.assertFalse(allow_benign(item), item["message"])
 
 
 class OneSessionTest(unittest.TestCase):
@@ -314,6 +357,28 @@ class OneSessionTest(unittest.TestCase):
         doc = export(events, [])
         self.assertEqual(doc["events"], [])
         self.assertEqual(doc["excluded"]["outside_session"], len(events))
+
+
+class ExampleLeakSweepTest(unittest.TestCase):
+    """What a reader of the example could learn about the host it came from."""
+
+    MAC_SHAPE = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+    EMAIL_SHAPE = re.compile(r"[\w.+-]+@[A-Za-z][\w-]*(?:\.[A-Za-z]{2,})+")
+    HOME_PATH = re.compile(r"/home/[^/\"\s]+")
+    PCI = re.compile(r"\b[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]\b")
+
+    def test_examples_stay_inside_documentation_ranges(self):
+        paths = sorted((ROOT / "examples").glob("*.json"))
+        self.assertTrue(paths, "no example was scanned")
+        for path in paths:
+            text = path.read_text()
+            for mac in self.MAC_SHAPE.findall(text):
+                self.assertTrue(mac.lower().startswith(DOC_MAC),
+                                f"{path.name} leaks a MAC outside {DOC_MAC}xx: {mac}")
+            self.assertEqual(self.EMAIL_SHAPE.findall(text), [], path.name)
+            homes = set(self.HOME_PATH.findall(text)) - {"/home/analyst"}
+            self.assertEqual(homes, set(), path.name)
+            self.assertEqual(self.PCI.findall(text), [], path.name)
 
 
 class FixtureIdentifierTest(unittest.TestCase):

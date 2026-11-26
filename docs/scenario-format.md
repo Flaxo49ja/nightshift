@@ -25,7 +25,7 @@ A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-t
 | `events` | array | Labelled events, sorted by timestamp. |
 | `truth` | array | Ground-truth records. **This is the answer key.** |
 | `side_effect_ids` | array | Event ids caused by the injector's own reloads. |
-| `excluded` | object | `outside_session` and `untied_injector` counts: what was left out, and why. |
+| `excluded` | object | `outside_session`, `untied_injector` and `not_allowlisted` counts: what was left out, and why. |
 | `teach` | object | `title`, `prompt`, `hints[]`, and `techniques[]` (see below). |
 | `limits` | array | What the scenario is not. |
 
@@ -43,8 +43,15 @@ truth record can own (a timer from an earlier run, a stale
 events outside the window are counted in `excluded.outside_session`. With no
 truth there is no session, so the export is background only.
 
-Background from the session window is capped; `--noise` is the way to add a
-real quiet day.
+Background is a closed list, whether it comes from the session window or
+`--noise`: systemd unit start/stop/timer lines that name a unit, sudo/su/auth
+events, and UFW firewall blocks. Kernel hardware, suspend/resume, lid and ACPI
+lines, desktop app starts, reload chatter, and service descriptions containing a
+path, a `~` or an `App - Window` shape are dropped and counted in
+`excluded.not_allowlisted`. A personal description that survives the shape
+check is only kept when it names a task generically; the range's own
+description is aliased to `backup sync`. Background from the window is also
+capped — `--noise` is the way to add a real quiet day.
 
 ## Events
 
@@ -59,7 +66,8 @@ Each event carries the event-schema fields plus one `label`:
 * `side_effect` — a manager line caused by the injector's own `daemon-reload`
   (`Reload requested…`, `Reloading…`, `Reloading finished…`) inside a run
   window. Not attack behaviour.
-* `benign` — everything else, including background from `--noise`.
+* `benign` — allowlisted background only, from the session window or `--noise`.
+  Anything that is not allowlisted is excluded rather than mislabelled.
 
 Event fields themselves are unchanged from `schema.py`: `id`, `ts`, `host`,
 `provider`, `source`, `event_type`, `priority`, `unit`, `user`, `pid`, `process`,
@@ -114,12 +122,16 @@ The exporter replaces identifiers **by value**, not by pattern-guessing:
 | this user's name | `analyst` |
 | the home directory | `/home/analyst` |
 | every IPv4 and IPv6 address, in fields and in text | `192.0.2.1`, `192.0.2.2`, … in order of appearance |
+| every MAC address | `00:00:5e:00:53:01`, `00:00:5e:00:53:02`, … (the documentation range) |
 | injector unit names (`nightshift-…`) | `backup-sync`, `media-indexer`, …, assigned in sorted order per scenario |
 | `nightshift simulated task` | `backup sync` |
 
 Timestamps and ports are kept: they are what makes the exercise about detection
 rather than about redaction. A clock time such as `05:04:11` is not mistaken for
-an IPv6 address. The alias list is fixed, so the same session always exports the
+an IPv6 address, and a MAC is six two-digit groups with five colons, so the IPv6
+matcher leaves it to the MAC replacer. The example sweep fails on any MAC outside
+`00:00:5e:00:53:xx`, any email-shaped string, any `/home/…` path other than
+`/home/analyst`, and any PCI address (`0000:00:1f.3`). The alias list is fixed, so the same session always exports the
 same names; a test fails if the string `nightshift` survives into `events` or
 `teach`.
 
