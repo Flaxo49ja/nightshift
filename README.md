@@ -294,6 +294,12 @@ scorecard's honesty rules, and one end-to-end shift over the fixtures.
 - `/var/log/audit/audit.log` is root-only on a default install. Without sudo the
   auditd provider says so instead of reporting a clean zero; use `--file` with a
   fixture to work offline.
+- T1543.002 (user service persistence) is a blind spot, and was left one:
+  `systemctl --user enable` writes nothing, `disable` writes nothing, and the
+  start line is `Starting <description>...` with the unit recorded as the
+  manager scope. A rule for it would either key on the injector's own
+  description or fire on every user service on the machine. The real lines are
+  in `fixtures/user_service_persistence.jsonl` so the negative is testable.
 - `sudo` events are only recorded when sudo actually reaches PAM. `sudo -n`
   failures, and `su` to a nonexistent user, are invisible — see above.
 - `_CMDLINE` is usually absent for services, so `cmdline` is often `null`

@@ -66,6 +66,28 @@ class DetectedAtTest(unittest.TestCase):
             self.assertGreaterEqual(parse_ts(item["detected_at"]), parse_ts(item["ts_first"]))
 
 
+class UserServicePersistenceTest(unittest.TestCase):
+    """T1543.002 was investigated and deliberately got no rule: `systemctl
+    --user enable` writes nothing to the journal, and the start line carries a
+    Description ("Starting <description>...") with the unit left as the manager
+    scope. A rule for it would fire on every user service on the box."""
+
+    def setUp(self):
+        self.events = normalize_fixture("user_service_persistence.jsonl")
+        self.rules = load_rules(ROOT / "rules")
+
+    def test_no_shipped_rule_claims_a_plain_user_service_start(self):
+        self.assertEqual(evaluate(self.events, self.rules), [])
+
+    def test_the_persistence_start_is_indistinguishable_from_a_benign_one(self):
+        starts = [e for e in self.events if e["event_type"] == "service_start"]
+        self.assertEqual(len(starts), 2)
+        self.assertEqual({e["unit"] for e in starts}, {"user@1000.service"})
+        # Both are Description lines, so neither carries the unit name that a
+        # timer line carries; the only difference is text the attacker chooses.
+        self.assertTrue(all(e["message"].startswith("Starting ") for e in starts))
+
+
 class VariantAttributionTest(unittest.TestCase):
     """Each rule must own one variant. A rule that also fires on the other
     variant would let "both variants caught" be true while one rule is dead."""
