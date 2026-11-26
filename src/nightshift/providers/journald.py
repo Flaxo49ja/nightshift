@@ -50,6 +50,16 @@ _UNIT_PREFIX = re.compile(
     r"(?:automount|device|mount|path|scope|service|slice|socket|swap|target|timer)):"
 )
 
+# User units are logged by the user manager itself, so the owning unit is
+# only named in the prose: "Started nightshift-cap2.timer." Without this the
+# unit is user@1000.service and a timer start looks like an ordinary service.
+_MANAGER_SCOPE = re.compile(r"^(?:init\.scope|user@\d+\.service)$")
+_UNIT_NAMED = re.compile(
+    r"^(?:Started|Starting|Stopped|Stopping|Finished|Failed to start|Failed to stop)\s+"
+    r"([A-Za-z0-9][\w@:.\-]*\."
+    r"(?:automount|device|mount|path|scope|service|slice|socket|swap|target|timer))\b"
+)
+
 
 def run_journalctl(after_cursor: str | None, since: datetime | None) -> list[dict]:
     cmd = ["journalctl", "--quiet", "--no-pager", "-o", "json"]
@@ -208,9 +218,9 @@ def _user(source: str, message: str) -> str | None:
 def _unit(raw: dict, message: str) -> str | None:
     """The unit that owns this entry, or the one the manager names in the line."""
     unit = raw.get("_SYSTEMD_UNIT") or raw.get("_SYSTEMD_USER_UNIT")
-    if unit and unit != _MANAGER_UNIT:
+    if unit and not _MANAGER_SCOPE.match(unit):
         return unit
-    match = _UNIT_PREFIX.match(message)
+    match = _UNIT_PREFIX.match(message) or _UNIT_NAMED.match(message)
     return match.group(1) if match else unit
 
 

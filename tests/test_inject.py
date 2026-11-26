@@ -66,6 +66,67 @@ class TimerInjectionTest(unittest.TestCase):
         self.assertEqual(record["status"], "skipped")
 
 
+class UnitFileTimerInjectionTest(unittest.TestCase):
+    """The second T1053.006 variant arms a real timer unit instead of asking
+    systemd-run for a transient one, so the rule cannot just match that binary."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def inject_here(self, runner):
+        return inject.inject_timer_unit(runner, unit_dir=self.dir,
+                                        sleeper=lambda seconds: None)
+
+    def files(self):
+        return sorted(p.name for p in self.dir.glob("nightshift-*"))
+
+    def test_writes_a_unit_pair_starts_it_and_removes_it(self):
+        runner = FakeRunner()
+        record = self.inject_here(runner)
+        self.assertEqual((record["status"], record["variant"]), ("ran", "unit-file"))
+        self.assertEqual(self.files(), [])
+        flat = [" ".join(call) for call in runner.calls]
+        self.assertTrue(any("daemon-reload" in call for call in flat))
+        self.assertTrue(any(" start " in f" {call} " for call in flat))
+        self.assertTrue(any(" stop " in f" {call} " for call in flat))
+
+    def test_the_timer_arms_once_after_a_second(self):
+        written = {}
+
+        def runner(argv, timeout=15):
+            if "start" in argv:
+                for path in self.dir.glob("nightshift-*"):
+                    written[path.suffix] = path.read_text()
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self.inject_here(runner)
+        self.assertIn("OnActiveSec=1", written[".timer"])
+        self.assertIn("Unit=nightshift-", written[".timer"])
+        self.assertIn("ExecStart=/bin/true", written[".service"])
+
+    def test_a_failed_start_is_reported_and_still_cleans_up(self):
+        record = self.inject_here(FakeRunner(returncode=1))
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(self.files(), [])
+
+    def test_missing_systemctl_is_a_skip_not_a_crash(self):
+        record = self.inject_here(FakeRunner(raises=FileNotFoundError()))
+        self.assertEqual(record["status"], "skipped")
+        self.assertEqual(self.files(), [])
+
+
+class VariantCoverageTest(unittest.TestCase):
+    def test_the_timer_technique_has_two_injectors(self):
+        self.assertEqual(len(inject.INJECTORS["T1053.006"]), 2)
+
+    def test_the_transient_variant_is_recorded_in_the_truth(self):
+        with mock.patch.object(inject.shutil, "which", return_value="/usr/bin/systemd-run"):
+            record = inject.inject_timer(FakeRunner())
+        self.assertEqual(record["variant"], "transient")
+
+
 class IngressInjectionTest(unittest.TestCase):
     def test_serves_one_file_over_loopback(self):
         fetched = {}

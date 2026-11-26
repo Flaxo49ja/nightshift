@@ -25,6 +25,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -35,7 +36,7 @@ PROVIDER = "journald"
 
 TECHNIQUES = {
     "T1548.003": "Sudo privilege enumeration (`sudo -n -l`)",
-    "T1053.006": "Transient user timer (`systemd-run --user`)",
+    "T1053.006": "User timer: transient (`systemd-run`) or a unit pair on disk",
     "T1105": "Loopback ingress transfer (fetch from a local mock server)",
     "T1046": "Loopback service discovery (TCP connect sweep)",
 }
@@ -98,19 +99,76 @@ def inject_sudo_enumeration(runner=_run) -> dict:
 
 
 def inject_timer(runner=_run) -> dict:
+    """Variant 1: a transient unit, as `systemd-run --on-active` creates it."""
     started = now()
     unit = f"nightshift-sim-{secrets.token_hex(4)}.timer"
     if not shutil.which("systemd-run"):
         return _record("T1053.006", "skipped", started, "systemd-run is not installed",
-                       marker=unit)
+                       marker=unit, variant="transient")
     try:
         runner(["systemd-run", "--user", "--on-active=1", f"--unit={unit}", "true"])
         # Cleanup is part of the simulation: nothing may outlive the run.
         runner(["systemctl", "--user", "reset-failed", unit])
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        return _record("T1053.006", "skipped", started, str(exc), marker=unit)
-    return _record("T1053.006", "ran", started, marker=unit,
+        return _record("T1053.006", "skipped", started, str(exc), marker=unit,
+                       variant="transient")
+    return _record("T1053.006", "ran", started, marker=unit, variant="transient",
                    note="transient timer; reset with systemctl --user reset-failed")
+
+
+UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
+
+SERVICE_UNIT = "[Unit]\nDescription=nightshift simulated task\n\n[Service]\nType=oneshot\nExecStart=/bin/true\n"
+
+# The timer has no Description= on purpose: systemd then logs its unit name,
+# which is the line the timer rule reads. The service keeps one so its start
+# is not mistaken for a description-less transient unit.
+TIMER_UNIT = "[Unit]\n\n[Timer]\nOnActiveSec=1\nUnit={name}.service\n"
+
+
+def inject_timer_unit(runner=_run, sleeper=time.sleep, unit_dir: Path | None = None) -> dict:
+    """Variant 2: arm a persistent timer the way an operator would.
+
+    The pair lands in the user's systemd directory, is started, and is removed
+    in `finally` whether or not anything worked, so nothing outlives the run.
+    """
+    started = now()
+    directory = Path(unit_dir) if unit_dir else UNIT_DIR
+    name = f"nightshift-{secrets.token_hex(4)}"
+    service = directory / f"{name}.service"
+    timer = directory / f"{name}.timer"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        service.write_text(SERVICE_UNIT, encoding="utf-8")
+        timer.write_text(TIMER_UNIT.format(name=name), encoding="utf-8")
+        runner(["systemctl", "--user", "daemon-reload"])
+        proc = runner(["systemctl", "--user", "start", f"{name}.timer"])
+        if proc.returncode != 0:
+            reason = (proc.stderr or proc.stdout or "").strip()
+            return _record("T1053.006", "failed", started,
+                           reason or f"systemctl exit {proc.returncode}",
+                           marker=f"{name}.timer", variant="unit-file")
+        sleeper(2.5)                    # OnActiveSec=1, plus room to land
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _record("T1053.006", "skipped", started,
+                       f"{type(exc).__name__}: {exc}", marker=f"{name}.timer",
+                       variant="unit-file")
+    finally:
+        for argv in (["systemctl", "--user", "stop", f"{name}.timer"],
+                     ["systemctl", "--user", "reset-failed", f"{name}.service"],
+                     ["systemctl", "--user", "daemon-reload"]):
+            try:
+                runner(argv)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        for path in (timer, service):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+    return _record("T1053.006", "ran", started, marker=f"{name}.timer",
+                   variant="unit-file",
+                   note="timer unit pair removed; daemon reloaded")
 
 
 class _OneShot(BaseHTTPRequestHandler):
@@ -168,10 +226,11 @@ def inject_discovery(ports=range(1, 21), connector=None) -> dict:
 
 
 INJECTORS = {
-    "T1548.003": inject_sudo_enumeration,
-    "T1053.006": inject_timer,
-    "T1105": inject_ingress,
-    "T1046": inject_discovery,
+    "T1548.003": (inject_sudo_enumeration,),
+    # Two variants of one technique, not two techniques.
+    "T1053.006": (inject_timer, inject_timer_unit),
+    "T1105": (inject_ingress,),
+    "T1046": (inject_discovery,),
 }
 
 
@@ -185,7 +244,11 @@ def run(techniques: list[str] | None = None, truth_path: Path | None = None,
         raise ValueError(f"unknown technique(s): {', '.join(unknown)} "
                          f"(choose from {', '.join(sorted(injectors))})")
 
-    records = [injectors[technique]() for technique in chosen]
+    records = []
+    for technique in chosen:
+        variants = injectors[technique]
+        for injector in (variants if isinstance(variants, tuple) else (variants,)):
+            records.append(injector())
     if truth_path is not None:
         write_truth(records, Path(truth_path), blind)
     return records

@@ -1,0 +1,12 @@
+{
+  "id": "timer-unit-introduced",
+  "title": "User timer unit started",
+  "severity": "medium",
+  "technique": "T1053.006",
+  "why": "A timer unit being started is how on-disk scheduled persistence is armed. journald classifies the start line as timer_run because the unit the manager names ends in .timer. A timer that merely fires starts its service instead, so routine scheduled work stays quiet.",
+  "false_positives": [
+    "a user starting a timer they installed themselves",
+    "a package install or upgrade that enables its own timer"
+  ],
+  "when": { "event_type": "timer_run" }
+}

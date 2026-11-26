@@ -97,6 +97,39 @@ class RecallTest(unittest.TestCase):
         self.assertEqual(card.false_negatives, 1)
 
 
+class VariantTest(unittest.TestCase):
+    """Two injection variants of one technique are still one technique. The
+    scorecard says so, and reports each variant separately."""
+
+    def two_variants(self, detections):
+        return score([
+            truth("T1053.006", observed=1, variant="transient"),
+            truth("T1053.006", started="2026-10-30T20:10:00.000000Z",
+                  ended="2026-10-30T20:11:00.000000Z", observed=1, variant="unit-file"),
+        ], detections)
+
+    def test_each_variant_is_counted_separately(self):
+        card = self.two_variants([
+            detection("T1053.006", ident="transient-detection"),
+            detection("T1053.006", ident="unit-detection",
+                      ts_first="2026-10-30T20:10:11.000000Z"),
+        ])
+        self.assertEqual(card.rows[0].injected, 2)
+        self.assertEqual(card.variants[("T1053.006", "transient")],
+                         {"injected": 1, "caught": 1})
+        self.assertEqual(card.variants[("T1053.006", "unit-file")],
+                         {"injected": 1, "caught": 1})
+        self.assertIn("transient 1/1", render(card))
+        self.assertIn("unit-file 1/1", render(card))
+
+    def test_a_variant_that_was_not_caught_reads_zero(self):
+        card = self.two_variants([detection("T1053.006", ident="only")])
+        self.assertEqual(card.variants[("T1053.006", "transient")],
+                         {"injected": 1, "caught": 1})
+        self.assertEqual(card.variants[("T1053.006", "unit-file")],
+                         {"injected": 1, "caught": 0})
+
+
 class HonestyTest(unittest.TestCase):
     def test_no_telemetry_technique_is_unscored_not_missed(self):
         card = score([truth("T1105")], [])

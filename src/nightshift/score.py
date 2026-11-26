@@ -63,6 +63,9 @@ class Scorecard:
     out_of_session: list[dict] = field(default_factory=list)
     repeats: list[dict] = field(default_factory=list)
     window: tuple[datetime, datetime] | None = None
+    # (technique, variant) -> {"injected": n, "caught": n}. Two variants of
+    # one technique stay one technique; this only says which shape was caught.
+    variants: dict[tuple[str, str], dict] = field(default_factory=dict)
 
     @property
     def scored_rows(self) -> list[TechniqueScore]:
@@ -118,6 +121,7 @@ def score(truth: list[dict], detections: list[dict],
     detections = [d for d in detections if _in_window(d, window)]
     matched: set[str] = set()
     by_technique: dict[str, TechniqueScore] = {}
+    variants: dict[tuple[str, str], dict] = {}
 
     for item in measures:
         technique = item["technique"]
@@ -135,12 +139,16 @@ def score(truth: list[dict], detections: list[dict],
             row.note = "no event recorded for this simulation"
             continue
         row.injected += 1
+        bucket = variants.setdefault((technique, str(item.get("variant") or "default")),
+                                     {"injected": 0, "caught": 0})
+        bucket["injected"] += 1
         for detection in detections:
             if detection.get("technique") != technique or detection["id"] in matched:
                 continue
             if _overlaps(detection, item):
                 matched.add(detection["id"])
                 row.detected += 1
+                bucket["caught"] += 1
                 break
 
     unmatched = [d for d in detections if d["id"] not in matched]
@@ -166,6 +174,7 @@ def score(truth: list[dict], detections: list[dict],
         out_of_session=out_of_session,
         repeats=repeats,
         window=window,
+        variants=variants,
     )
 
 
@@ -182,6 +191,15 @@ def render(card: Scorecard, provider: str = "journald") -> str:
                      f"{row.detected:>8}{row.missed:>8}{tail}")
     if not card.rows:
         lines.append("  no injected techniques recorded — run `nightshift inject` first")
+
+    per_technique: dict[str, list[tuple[str, dict]]] = {}
+    for (technique, variant), counts in card.variants.items():
+        per_technique.setdefault(technique, []).append((variant, counts))
+    for technique, parts in sorted(per_technique.items()):
+        if len(parts) > 1:
+            detail = ", ".join(f"{variant} {counts['caught']}/{counts['injected']}"
+                               for variant, counts in sorted(parts))
+            lines.append(f"  {technique} variants: {detail}")
 
     for item in card.skipped:
         lines.append(f"  skipped {item['technique']}: {item.get('reason') or 'not run'}")

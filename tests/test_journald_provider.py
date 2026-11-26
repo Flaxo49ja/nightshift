@@ -132,6 +132,28 @@ class FieldExtractionTest(unittest.TestCase):
                          _SYSTEMD_UNIT="other.service")
         self.assertEqual(self.provider.normalize(raw).unit, "other.service")
 
+    def test_user_timer_unit_is_recovered_from_the_start_line(self):
+        # User units are logged from the manager's init.scope, so the real
+        # unit name only exists in the message.
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd",
+                         MESSAGE="Started nightshift-cap2.timer.",
+                         _SYSTEMD_UNIT="user@1000.service",
+                         _SYSTEMD_USER_UNIT="init.scope")
+        event = self.provider.normalize(raw)
+        self.assertEqual(event.unit, "nightshift-cap2.timer")
+        self.assertEqual(event.event_type, "timer_run")
+
+    def test_a_described_timer_start_stays_a_service_start(self):
+        # With a Description the line carries prose, not the unit name. Guessing
+        # a unit out of prose would be inventing data.
+        raw = self.entry(SYSLOG_IDENTIFIER="systemd",
+                         MESSAGE="Started nightshift capture timer.",
+                         _SYSTEMD_UNIT="user@1000.service",
+                         _SYSTEMD_USER_UNIT="init.scope")
+        event = self.provider.normalize(raw)
+        self.assertEqual(event.unit, "user@1000.service")
+        self.assertEqual(event.event_type, "service_start")
+
     def test_manager_line_without_a_unit_keeps_its_placeholder(self):
         raw = self.entry(SYSLOG_IDENTIFIER="systemd", MESSAGE="Started Steam.",
                          _SYSTEMD_UNIT="init.scope")

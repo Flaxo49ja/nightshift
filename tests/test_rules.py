@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from nightshift.providers.journald import JournaldProvider
 from nightshift.rules import (RuleError, detection_id, evaluate, load_rule,
                               load_rules, matches, parse_duration)
 
@@ -29,6 +30,57 @@ BASE = {
 
 def rule(**overrides):
     return load_rule({**BASE, **overrides})
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def normalize_fixture(name):
+    provider = JournaldProvider()
+    rows = [json.loads(line) for line in (ROOT / "fixtures" / name).read_text().splitlines()
+            if line.strip()]
+    return [event.to_dict() for event in (provider.normalize(row) for row in rows) if event]
+
+
+class TimerVariantRuleTest(unittest.TestCase):
+    """T1053.006 shows up in two shapes. Both must fire, and a timer that only
+    fires must not, or the rule is counting scheduler noise."""
+
+    def setUp(self):
+        self.events = normalize_fixture("timer_variants.jsonl")
+        self.rules = load_rules(ROOT / "rules")
+
+    def technique_hits(self, events):
+        return [d for d in evaluate(events, self.rules) if d["technique"] == "T1053.006"]
+
+    def test_the_transient_variant_is_caught(self):
+        transient = [e for e in self.events if "[systemd-run]" in e["message"]]
+        self.assertEqual(len(self.technique_hits(transient)), 1)
+
+    def test_the_unit_file_variant_is_caught(self):
+        timer_started = [e for e in self.events
+                         if e["event_type"] == "timer_run" and (e["unit"] or "").endswith(".timer")]
+        self.assertEqual(len(timer_started), 1)
+        self.assertEqual(len(self.technique_hits(timer_started)), 1)
+
+    def test_the_whole_fixture_gives_one_detection_per_variant(self):
+        # Two variants, two detections. If a rule also matched the other
+        # variant's service line this would be three and the counts would lie.
+        self.assertEqual(len(self.technique_hits(self.events)), 2)
+
+    def test_a_timer_that_fires_is_not_a_timer_being_introduced(self):
+        # "Auto-organize ~/Downloads" is a real user timer on this machine.
+        # Its service starting is the timer working, not new persistence.
+        benign = [e for e in self.events if "Auto-organize" in e["message"]]
+        self.assertTrue(benign)
+        self.assertEqual(self.technique_hits(benign), [])
+
+    def test_no_timer_rule_keys_on_the_injector_binary(self):
+        timer_rules = [r for r in self.rules if r.technique == "T1053.006"]
+        self.assertTrue(timer_rules)
+        for rule in timer_rules:
+            with self.subTest(rule=rule.id):
+                self.assertNotIn("systemd-run", json.dumps(rule.when).lower())
 
 
 class DurationTest(unittest.TestCase):
