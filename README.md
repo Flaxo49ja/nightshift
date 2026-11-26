@@ -228,7 +228,9 @@ just outside the arithmetic they do not belong in.
 * **A second detection of an already-caught technique in the same window is a
   repeat, not a false alarm.** One `systemd-run` writes more than one journal
   entry, so two rules can fire on one injection; that is one catch and one
-  duplicate.
+  duplicate. A blind spot has no telemetry and an unobserved run produced
+  nothing, so neither has a catch to duplicate: a detection of either stays a
+  false positive.
 * **Any other detection that lines up with no injection is a false positive** —
   even if it looks plausible, even if it was a real event on the host, and
   including a plausible detection of the wrong technique inside the window.

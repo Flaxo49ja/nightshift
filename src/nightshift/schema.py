@@ -44,6 +44,12 @@ def event_id(provider: str, cursor: str) -> str:
     return hashlib.sha256(f"{provider}:{cursor}".encode()).hexdigest()[:16]
 
 
+def parse_ts(value: str) -> datetime:
+    """Read both spellings we produce: rfc3339_utc's "Z" and isoformat's
+    "+00:00". Comparing these as strings is not comparing times."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def rfc3339_utc(microseconds: int) -> str:
     """One timestamp format everywhere, so MTTD is subtraction, not parsing."""
     dt = datetime.fromtimestamp(microseconds / 1_000_000, tz=timezone.utc)

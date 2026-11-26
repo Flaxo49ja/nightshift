@@ -5,7 +5,7 @@ break silently — so these pin the shape rather than the values.
 """
 import unittest
 
-from nightshift.schema import EVENT_TYPES, Event, event_id, rfc3339_utc
+from nightshift.schema import EVENT_TYPES, Event, event_id, parse_ts, rfc3339_utc
 
 FIELDS = [
     "id", "ts", "host", "provider", "source", "event_type", "priority",
@@ -36,6 +36,20 @@ class TimestampTest(unittest.TestCase):
         rendered = rfc3339_utc(0)
         self.assertEqual(rendered, "1970-01-01T00:00:00.000000Z")
         self.assertFalse(rendered.endswith("+00:00"))
+
+
+class ParseTest(unittest.TestCase):
+    def test_the_two_spellings_of_the_same_instant_compare_equal(self):
+        # rfc3339_utc writes "Z"; datetime.isoformat() writes "+00:00" and
+        # drops ".000000". Comparing those as strings is not comparing times.
+        self.assertEqual(parse_ts("2026-10-30T20:04:05.000000Z"),
+                         parse_ts("2026-10-30T20:04:05+00:00"))
+
+    def test_ordering_holds_across_mixed_formats(self):
+        self.assertGreater(parse_ts("2026-10-30T20:04:05.000001Z"),
+                           parse_ts("2026-10-30T20:04:05+00:00"))
+        self.assertLess(parse_ts("2026-10-30T20:04:04.999999Z"),
+                        parse_ts("2026-10-30T20:04:05+00:00"))
 
 
 class EventShapeTest(unittest.TestCase):

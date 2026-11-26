@@ -12,8 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from nightshift.cli import (build_parser, collect, default_state_dir, demo,
-                            parse_since, shift)
+from nightshift.cli import (_verify_observed, build_parser, collect,
+                            default_state_dir, demo, parse_since, shift)
 from nightshift.providers.base import CursorInvalid
 from nightshift.providers.journald import JournaldProvider
 
@@ -215,6 +215,36 @@ class ParseSinceTest(unittest.TestCase):
     def test_default_is_seven_days(self):
         now = datetime.now(timezone.utc)
         self.assertAlmostEqual((now - parse_since(None)).total_seconds(), 604_800, delta=5)
+
+
+class VerifyObservedTest(unittest.TestCase):
+    """`observed` is what separates "the rule missed it" from "nothing was
+    there". It used to compare a Z timestamp against datetime.isoformat(),
+    which is a string comparison between two different spellings.
+    """
+
+    RECORD = {"technique": "T1053.006", "status": "ran", "title": "t",
+              "started": "2026-10-30T20:04:00.000000Z",
+              "ended": "2026-10-30T20:04:02.000000Z"}
+
+    def observed_at(self, ts):
+        event = SimpleNamespace(event_type="timer_run", ts=ts)
+        provider = SimpleNamespace(fetch=lambda *a, **k: [event], normalize=lambda e: e)
+        record = dict(self.RECORD)
+        with mock.patch("nightshift.cli.JournaldProvider", return_value=provider):
+            _verify_observed([record])
+        return record["observed"]
+
+    def test_event_inside_the_simulation_is_observed(self):
+        self.assertEqual(self.observed_at("2026-10-30T20:04:01.500000Z"), 1)
+
+    def test_event_on_the_last_instant_is_observed(self):
+        # ended + 5s grace. String comparison dropped exactly this instant
+        # because "...07.000000Z" sorts after "...07+00:00".
+        self.assertEqual(self.observed_at("2026-10-30T20:04:07.000000Z"), 1)
+
+    def test_event_past_the_grace_is_not_observed(self):
+        self.assertEqual(self.observed_at("2026-10-30T20:04:07.000001Z"), 0)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .schema import parse_ts
+
 # Event fields a rule may filter on. Anything else is a typo, not a feature.
 MATCH_FIELDS = frozenset({
     "event_type", "source", "provider", "user", "host", "unit", "process",
@@ -211,7 +213,7 @@ def matches(when: dict, event: dict) -> bool:
 
 
 def _ts(event: dict) -> datetime:
-    return datetime.fromisoformat(event["ts"].replace("Z", "+00:00"))
+    return parse_ts(event["ts"])
 
 
 def detection_id(rule_id: str, first_event_id: str) -> str:

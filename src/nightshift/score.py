@@ -34,12 +34,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from .coverage import visibility
+from .schema import parse_ts
 
 SLACK = timedelta(seconds=300)
-
-
-def _ts(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 @dataclass
@@ -91,17 +88,17 @@ class Scorecard:
 
 
 def _overlaps(detection: dict, truth: dict) -> bool:
-    start = _ts(truth["started"]) - SLACK
-    end = _ts(truth["ended"]) + SLACK
-    return _ts(detection["ts_last"]) >= start and _ts(detection["ts_first"]) <= end
+    start = parse_ts(truth["started"]) - SLACK
+    end = parse_ts(truth["ended"]) + SLACK
+    return parse_ts(detection["ts_last"]) >= start and parse_ts(detection["ts_first"]) <= end
 
 
 def session_window(measures: list[dict]) -> tuple[datetime, datetime] | None:
     """The span this experiment covers: first injection to last, plus `SLACK`."""
     if not measures:
         return None
-    start = min(_ts(item["started"]) for item in measures) - SLACK
-    end = max(_ts(item["ended"]) for item in measures) + SLACK
+    start = min(parse_ts(item["started"]) for item in measures) - SLACK
+    end = max(parse_ts(item["ended"]) for item in measures) + SLACK
     return start, end
 
 
@@ -109,7 +106,7 @@ def _in_window(detection: dict, window: tuple[datetime, datetime] | None) -> boo
     if window is None:
         return True
     start, end = window
-    return _ts(detection["ts_last"]) >= start and _ts(detection["ts_first"]) <= end
+    return parse_ts(detection["ts_last"]) >= start and parse_ts(detection["ts_first"]) <= end
 
 
 def score(truth: list[dict], detections: list[dict],
@@ -149,11 +146,16 @@ def score(truth: list[dict], detections: list[dict],
     unmatched = [d for d in detections if d["id"] not in matched]
     # A second detection of a technique that was injected in this window is the
     # same event seen twice, not an invented alert. Anything else is a false
-    # positive, including a plausible detection of the wrong technique.
+    # positive, including a plausible detection of the wrong technique. Only a
+    # simulation that could be caught counts: a blind spot has no telemetry
+    # and an unobserved run produced nothing, so neither was already caught.
+    catchable = [item for item in measures
+                 if visibility(item["technique"], provider) == "observed"
+                 and item.get("observed") != 0]
     repeats = [
         d for d in unmatched
         if any(d.get("technique") == item["technique"] and _overlaps(d, item)
-               for item in measures)
+               for item in catchable)
     ]
     repeat_ids = {d["id"] for d in repeats}
 

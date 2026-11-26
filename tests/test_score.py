@@ -66,6 +66,21 @@ class RecallTest(unittest.TestCase):
         self.assertEqual([d["id"] for d in card.repeats], ["unit-finished"])
         self.assertIn("same technique already caught in the window", render(card))
 
+    def test_detection_of_a_simulation_that_recorded_nothing_is_a_false_positive(self):
+        # Nothing was observed, so nothing was caught. Calling this a repeat
+        # would excuse an alert on the strength of a catch that never happened.
+        card = score([truth("T1548.003", observed=0)], [detection("T1548.003")])
+        self.assertEqual(card.repeats, [])
+        self.assertEqual([d["id"] for d in card.false_positives], ["d1"])
+        self.assertNotIn("already caught", render(card))
+
+    def test_detection_of_a_blind_spot_is_a_false_positive(self):
+        # No telemetry exists for T1105, so a detection of it is not a catch
+        # and cannot be a duplicate of one.
+        card = score([truth("T1105")], [detection("T1105")])
+        self.assertEqual(card.repeats, [])
+        self.assertEqual([d["id"] for d in card.false_positives], ["d1"])
+
     def test_journald_lag_within_slack_still_matches(self):
         # SLACK is 5 minutes; journald can be well behind wall clock
         card = score([truth("T1110.001")],

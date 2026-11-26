@@ -27,6 +27,7 @@ from .providers.journald import DEFAULT_SOURCES, JournaldProvider
 from .queue import STATUSES, TriageQueue, resolve
 from .report import render as render_coverage
 from .rules import RuleError, evaluate, load_rules
+from .schema import parse_ts
 from .score import render as render_score
 from .score import score as score_detections
 from .store import EventStore, append_jsonl, read_jsonl
@@ -273,8 +274,8 @@ def _verify_observed(records: list[dict]) -> None:
         if record.get("status") != "ran":
             continue
         expected = inject_mod.EXPECTED_EVENT_TYPES.get(record["technique"], set())
-        start = datetime.fromisoformat(record["started"].replace("Z", "+00:00"))
-        end = datetime.fromisoformat(record["ended"].replace("Z", "+00:00")) + timedelta(seconds=5)
+        start = parse_ts(record["started"])
+        end = parse_ts(record["ended"]) + timedelta(seconds=5)
         try:
             entries = provider.fetch(None, start - timedelta(seconds=2))
         except (RuntimeError, OSError):
@@ -282,7 +283,7 @@ def _verify_observed(records: list[dict]) -> None:
         count = 0
         for entry in entries:
             event = provider.normalize(entry)
-            if event and event.event_type in expected and record["started"] <= event.ts <= end.isoformat():
+            if event and event.event_type in expected and start <= parse_ts(event.ts) <= end:
                 count += 1
         record["observed"] = count
 
