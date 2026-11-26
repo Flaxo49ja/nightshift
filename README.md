@@ -282,6 +282,11 @@ last N hours *of the store*, ending at the newest event, so an old collection
 still describes the day it came from. No baseline number is published here yet:
 the one real day collected so far was after manual probes, not a quiet one.
 
+The dead ends and the bugs behind these numbers are in the
+[devlog](docs/devlog.md): the 33% precision that started it, two timestamp and
+repeat bugs, the negative MTTD, and the export sweep that found real addresses
+in old fixtures.
+
 ## What journald cannot see, and auditd can
 
 `nightshift collect --provider auditd` parses `/var/log/audit/audit.log`
