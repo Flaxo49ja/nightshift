@@ -49,6 +49,7 @@ class TechniqueScore:
     unscored: int = 0        # no telemetry possible: never a miss
     unobserved: int = 0      # ran, but produced no event on this host
     note: str = ""
+    mttd: float | None = None  # mean seconds from injection to first detection
 
     @property
     def missed(self) -> int:
@@ -122,6 +123,7 @@ def score(truth: list[dict], detections: list[dict],
     matched: set[str] = set()
     by_technique: dict[str, TechniqueScore] = {}
     variants: dict[tuple[str, str], dict] = {}
+    latencies: dict[str, list[float]] = {}
 
     for item in measures:
         technique = item["technique"]
@@ -149,7 +151,12 @@ def score(truth: list[dict], detections: list[dict],
                 matched.add(detection["id"])
                 row.detected += 1
                 bucket["caught"] += 1
+                latencies.setdefault(technique, []).append(
+                    (parse_ts(detection["ts_first"]) - parse_ts(item["started"])).total_seconds())
                 break
+
+    for technique, samples in latencies.items():
+        by_technique[technique].mttd = sum(samples) / len(samples)
 
     unmatched = [d for d in detections if d["id"] not in matched]
     # A second detection of a technique that was injected in this window is the
@@ -180,15 +187,17 @@ def score(truth: list[dict], detections: list[dict],
 
 def render(card: Scorecard, provider: str = "journald") -> str:
     lines = [f"nightshift score — provider {provider}", ""]
-    lines.append(f"  {'TECH':<10}{'VISIBILITY':<14}{'INJECTED':>9}{'CAUGHT':>8}{'MISSED':>8}")
+    lines.append(f"  {'TECH':<10}{'VISIBILITY':<14}{'INJECTED':>9}{'CAUGHT':>8}"
+                 f"{'MISSED':>8}{'MTTD':>9}")
     for row in card.rows:
         tail = ""
         if not row.scored:
             tail = "   not scored: no telemetry"
         elif row.unobserved and not row.injected:
             tail = "   not scored: nothing observed"
+        mttd = f"{row.mttd:.1f}s" if row.mttd is not None else "—"
         lines.append(f"  {row.technique:<10}{row.visibility:<14}{row.injected:>9}"
-                     f"{row.detected:>8}{row.missed:>8}{tail}")
+                     f"{row.detected:>8}{row.missed:>8}{mttd:>9}{tail}")
     if not card.rows:
         lines.append("  no injected techniques recorded — run `nightshift inject` first")
 

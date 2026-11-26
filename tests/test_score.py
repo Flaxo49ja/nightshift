@@ -130,6 +130,30 @@ class VariantTest(unittest.TestCase):
                          {"injected": 1, "caught": 0})
 
 
+class MttdTest(unittest.TestCase):
+    def test_mttd_is_the_gap_from_injection_to_first_detection(self):
+        card = score([truth("T1110.001", started="2026-10-30T20:04:00.000000Z")],
+                     [detection("T1110.001", ts_first="2026-10-30T20:04:11.000000Z")])
+        self.assertAlmostEqual(card.rows[0].mttd, 11.0)
+        self.assertIn("MTTD", render(card))
+        self.assertIn("11.0s", render(card))
+
+    def test_mttd_is_undefined_when_nothing_was_caught(self):
+        card = score([truth("T1110.001")], [])
+        self.assertIsNone(card.rows[0].mttd)
+
+    def test_mttd_averages_the_variants_of_one_technique(self):
+        card = score([
+            truth("T1053.006", started="2026-10-30T20:04:00.000000Z", observed=1, variant="a"),
+            truth("T1053.006", started="2026-10-30T20:10:00.000000Z",
+                  ended="2026-10-30T20:11:00.000000Z", observed=1, variant="b"),
+        ], [
+            detection("T1053.006", ident="a", ts_first="2026-10-30T20:04:10.000000Z"),
+            detection("T1053.006", ident="b", ts_first="2026-10-30T20:10:30.000000Z"),
+        ])
+        self.assertAlmostEqual(card.rows[0].mttd, 20.0)
+
+
 class HonestyTest(unittest.TestCase):
     def test_no_telemetry_technique_is_unscored_not_missed(self):
         card = score([truth("T1105")], [])

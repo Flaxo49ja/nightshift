@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -53,6 +53,7 @@ class Rule:
     within: int | None = None          # seconds; required when count_gte > 1
     why: str = ""
     false_positives: tuple[str, ...] = field(default=())
+    sha: str = ""                      # hash of the rule file, set by load_rules
 
     @property
     def is_burst(self) -> bool:
@@ -183,6 +184,9 @@ def load_rules(directory: Path) -> list[Rule]:
         except json.JSONDecodeError as exc:
             raise RuleError(f"{path.name}: not valid JSON ({exc})") from exc
         rule = load_rule(data)
+        # The detection keeps this, so a triage note can name the rule text it
+        # was written against even after the rule changes.
+        rule = replace(rule, sha=hashlib.sha256(path.read_bytes()).hexdigest()[:12])
         if rule.id in seen:
             raise RuleError(f"duplicate rule id {rule.id!r} (see {path.name})")
         seen.add(rule.id)
@@ -272,4 +276,5 @@ def _detection(rule: Rule, events: list[dict], key: str | None) -> dict:
         "ts_first": first["ts"],
         "ts_last": last["ts"],
         "event_ids": [e["id"] for e in events],
+        "rule_sha": rule.sha,
     }

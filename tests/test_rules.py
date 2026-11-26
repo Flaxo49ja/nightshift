@@ -1,5 +1,6 @@
 """Rules are data, so the loader is the only thing standing between a typo and
 a detection that silently never fires."""
+import hashlib
 import json
 import tempfile
 import unittest
@@ -40,6 +41,31 @@ def normalize_fixture(name):
     rows = [json.loads(line) for line in (ROOT / "fixtures" / name).read_text().splitlines()
             if line.strip()]
     return [event.to_dict() for event in (provider.normalize(row) for row in rows) if event]
+
+
+class RuleHashTest(unittest.TestCase):
+    """A detection without the rule text that produced it cannot be reviewed
+    a week later, when the rule has changed."""
+
+    def test_a_loaded_rule_carries_the_hash_of_its_file(self):
+        rules = {r.id: r for r in load_rules(ROOT / "rules")}
+        path = ROOT / "rules" / "timer-unit-introduced.json"
+        expected = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+        self.assertEqual(rules["timer-unit-introduced"].sha, expected)
+
+    def test_two_rules_with_the_same_id_never_share_a_hash(self):
+        rules = {r.id: r for r in load_rules(ROOT / "rules")}
+        shas = [r.sha for r in rules.values()]
+        self.assertEqual(len(set(shas)), len(shas))
+
+    def test_a_detection_names_the_rule_version_that_fired(self):
+        rules = load_rules(ROOT / "rules")
+        events = normalize_fixture("timer_variants.jsonl")
+        detection = next(d for d in evaluate(events, rules)
+                         if d["rule_id"] == "timer-unit-introduced")
+        rule = next(r for r in rules if r.id == "timer-unit-introduced")
+        self.assertEqual(detection["rule_sha"], rule.sha)
+        self.assertEqual(len(rule.sha), 12)
 
 
 class TimerVariantRuleTest(unittest.TestCase):
