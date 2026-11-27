@@ -21,6 +21,7 @@ techniques (including T1543.002) so the debrief can explain what the log could
 not show. A player who sees no attack evidence should answer "Nothing visible";
 the scenario cannot be used to measure a detection that the provider never saw.
 
+
 A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-timer.json).
 
 ## Top-level document
@@ -32,7 +33,7 @@ A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-t
 | `events` | array | Labelled events, sorted by timestamp. |
 | `truth` | array | Ground-truth records. **This is the answer key.** |
 | `side_effect_ids` | array | Event ids caused by the injector's own reloads. |
-| `excluded` | object | `outside_session`, `untied_injector` and `not_allowlisted` counts: what was left out, and why. |
+| `excluded` | object | `outside_session`, `untied_injector`, `not_allowlisted`, `noise_injector`, `noise_in_window` and `noise_not_allowlisted` counts: what was left out, and why. |
 | `teach` | object | `title`, `prompt`, `hints[]`, and `techniques[]` (see below). |
 | `limits` | array | What the scenario is not. |
 
@@ -58,17 +59,20 @@ set, the export fails with an error instead of silently dropping the attack.
 The remaining slots are filled with allowlisted background, nearest the
 truth windows first. Where two candidates are equally near, `--seed` decides
 (sha256 of seed and event id), so a level is reproducible without depending on
-store order. The result is still sorted by time.
+store order. The result is still sorted by time. Quiet input selected for those
+slots is rebased into the session window in its original order, so a corpus
+from another day cannot create a second timeline; `limits` says that background
+timestamps are rebased and attack/side-effect timestamps are real.
 
 Background is a closed list, whether it comes from the session window or
-`--noise`: systemd unit start/stop/timer lines that name a unit, sudo/su/auth
-events, and UFW firewall blocks. Kernel hardware, suspend/resume, lid and ACPI
-lines, desktop app starts, reload chatter, and service descriptions containing a
-path, a `~` or an `App - Window` shape are dropped and counted in
-`excluded.not_allowlisted`. A personal description that survives the shape
-check is only kept when it names a task generically; the range's own
-description is aliased to `backup sync`. Background from the window is also
-capped — `--noise` is the way to add a real quiet day.
+`--noise`: auth events, UFW firewall blocks, and a fixed set of generic unit
+descriptions (for example `user preferences database`, `network manager script
+dispatcher service`, and the injector aliases such as `backup sync`). Any other
+application, desktop, hardware or device name is dropped and counted in
+`excluded.not_allowlisted`; a description with a path, `~` or `App - Window`
+shape is dropped too. Noise gets the same injector-shaped and truth-window drops
+as session events, counted as `noise_injector` and `noise_in_window`; its
+non-allowlisted count is `noise_not_allowlisted`.
 
 ## Events
 

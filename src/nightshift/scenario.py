@@ -61,6 +61,7 @@ DESCRIPTION_ALIAS = "backup sync"
 # simulated technique.
 SIDE_EFFECTS = ("reload requested", "reloading", "reloading finished")
 
+
 # How each technique looks in the journal, for the teaching block. Rule text
 # comes from the rule itself; this is the shape an analyst has to recognise.
 LOOKS_LIKE = {
@@ -119,7 +120,8 @@ TEACH = {
 LIMITS = {
     "en": [
         "Sanitized: hostnames, usernames and home paths are replaced, and every IP "
-        "address is mapped into 192.0.2.0/24. Timestamps are real.",
+        "address is mapped into 192.0.2.0/24. Background timestamps rebased; "
+        "attack and side-effect timestamps are real.",
         "Injector-created unit names and descriptions are aliases from a fixed list; "
         "the aliasing is deterministic per scenario, so two exports of the same "
         "session agree.",
@@ -130,7 +132,8 @@ LIMITS = {
     ],
     "pt": [
         "Sanitizado: nomes de host, usuários e caminhos pessoais foram substituídos, e "
-        "todo endereço IP foi mapeado para 192.0.2.0/24. Os horários são reais.",
+        "todo endereço IP foi mapeado para 192.0.2.0/24. Os horários do plano de "
+        "fundo foram redistribuídos; ataque e efeitos colaterais são reais.",
         "Nomes de unidades e descrições criados pelo injetor são apelidos de uma lista "
         "fixa; o mapeamento é determinístico por cenário.",
         "O gabarito está neste arquivo. É um cenário, não um teste às cegas.",
@@ -225,22 +228,72 @@ def session_bounds(truth: list[dict]):
     return min(starts) - timedelta(seconds=SESSION_PAD), max(ends) + timedelta(seconds=SESSION_PAD)
 
 
-# Background is a closed list. Kernel chatter (hardware, suspend, ACPI) is
-# not background an analyst should learn from, and a service description can
-# name a person's files. A manager line qualifies by naming a unit, or by
-# describing a task without a path, home shortcut or "App - Window" shape.
+# Background is a closed list. Any application, desktop or hardware name is
+# dropped: a quiet-host corpus may only contain the generic descriptions below.
+# The injector aliases are here too, after _rename makes them safe to publish.
+BACKGROUND_DESCRIPTIONS = frozenset({
+    "network manager script dispatcher service",
+    "user preferences database",
+    "virtual console setup",
+    "journal service",
+    "hostname service",
+    "time & date service",
+    "load kernel modules",
+    "coldplug all udev devices",
+    "create system files and directories",
+    "rule-based manager for device events and files",
+    "update the plocate database",
+    "verify integrity of password and group files",
+    "system suspend",
+    "sleep",
+    "suspend",
+    "backup sync",
+    "backup-sync",
+    "log rotate",
+    "log-rotate",
+    "media indexer",
+    "media-indexer",
+    "photo import",
+    "photo-import",
+    "note sync",
+    "note-sync",
+    "cache warm",
+    "cache-warm",
+})
 AUTH_TYPES = frozenset({"auth_success", "auth_failure", "sudo_command",
                         "session_open", "session_close", "account_change"})
 UNIT_EVENT_TYPES = frozenset({"service_start", "service_stop", "service_failed",
                               "timer_run", "cron_run"})
 UNIT_LINE = re.compile(r"\.(?:service|timer|socket|scope|target|mount|device|swap)\b")
-MANAGER_PREFIXES = ("starting ", "started ", "stopping ", "stopped ",
-                    "finished ", "failed ")
+MANAGER_PREFIXES = tuple(sorted(("starting ", "started ", "stopping ", "stopped ",
+                                "finished ", "failed to start ", "failed to stop ",
+                                "failed "), key=len, reverse=True))
 PERSONAL = re.compile(r"[~/]| - ")
+UNIT_SUFFIX = re.compile(r"\.(?:service|timer|socket|scope|target|mount|device|swap)$")
+
+
+def _description(message: str) -> str | None:
+    """The generic task name in a manager line, or None for another shape."""
+    text = message.strip()
+    lower = text.lower()
+    for prefix in MANAGER_PREFIXES:
+        if not lower.startswith(prefix):
+            continue
+        description = text[len(prefix):].strip().rstrip(".")
+        if ": " in description:
+            description = description.split(": ", 1)[0]
+        if description.lower().startswith("target "):
+            description = description[7:]
+        return UNIT_SUFFIX.sub("", description).lower()
+    if ":" in text:
+        head = text.split(":", 1)[0].strip()
+        if UNIT_LINE.search(head):
+            return UNIT_SUFFIX.sub("", head).lower()
+    return None
 
 
 def allow_benign(event: dict) -> bool:
-    """True only for the shapes a quiet-host corpus may contain."""
+    """True only for a fixed generic description a quiet host may contain."""
     event_type = event.get("event_type")
     if event_type == "firewall_block":
         return True
@@ -249,13 +302,10 @@ def allow_benign(event: dict) -> bool:
     if event_type not in UNIT_EVENT_TYPES or event.get("source") == "kernel":
         return False
     message = (event.get("message") or "").strip()
-    if UNIT_LINE.search(message):
-        return True
-    lower = message.lower()
-    if lower.startswith(MANAGER_PREFIXES):
-        description = message.split(" ", 1)[1] if " " in message else ""
-        return not PERSONAL.search(description.rstrip("."))
-    return False
+    description = _description(message)
+    if description is None or PERSONAL.search(description):
+        return False
+    return description in BACKGROUND_DESCRIPTIONS
 
 
 def _injector_shaped(event: dict) -> bool:
@@ -356,6 +406,30 @@ def scenario_id(events: list[dict], truth: list[dict]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
 
 
+def _rebase_noise(events: list[dict], bounds) -> list[dict]:
+    """Keep the quiet day's order, but place it inside this session's clock.
+
+    A corpus collected on another day is scenery, not a second timeline. The
+    first event lands at the session start and the last at its end, evenly
+    spaced between, with timestamps rounded to microseconds.
+    """
+    if not events or bounds is None:
+        return [dict(event) for event in events]
+    ordered = sorted(events, key=lambda event: (parse_ts(event["ts"]), event["id"]))
+    start, end = bounds
+    span = end - start
+    count = len(ordered)
+    rebased = []
+    for index, event in enumerate(ordered):
+        fraction = index / (count - 1) if count > 1 else 0.0
+        moment = start + span * fraction
+        rebased.append({
+            **event,
+            "ts": moment.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+        })
+    return rebased
+
+
 def _background_rank(event: dict, required: list[dict], seed: int):
     """Nearest the attacks first; the seed settles what distance cannot."""
     moment = parse_ts(event["ts"])
@@ -404,12 +478,28 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
     benign = [event for event in labelled if event["label"] == "benign"]
     allowed = [event for event in benign if allow_benign(event)]
     not_allowed = len(benign) - len(allowed)
-    quiet = [{**event, "label": "benign"} for event in (noise or [])
+
+    # Quiet input is held to the same rules as the session: stale injector
+    # runs and anything inside a truth window are not scenery.
+    noise_in_window = 0
+    noise_injector = 0
+    clean_noise = []
+    for event in (noise or []):
+        if any(_in_window(event, record) for record in truth):
+            noise_in_window += 1
+            continue
+        if _injector_shaped(event):
+            noise_injector += 1
+            continue
+        clean_noise.append(event)
+    quiet = [{**event, "label": "benign"} for event in clean_noise
              if allow_benign(event)]
+    noise_not_allowed = len(clean_noise) - len(quiet)
+
     if blind:
-        # There are no attack labels to protect, so keep the night's own
-        # allowlisted lines and fill the rest with quiet background.
-        required = allowed
+        # There is no attack label to protect, but the session's own lines must
+        # stay: the user-service start is the blind spot the exercise is about.
+        required = [event for event in labelled if event["label"] != "benign"] + allowed
         candidates = quiet
     else:
         required = [event for event in labelled if event["label"] != "benign"]
@@ -420,6 +510,13 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
             "required session events")
     slots = max_events - len(required)
     chosen = sorted(candidates, key=lambda event: _background_rank(event, required, seed))[:slots]
+    # Rebase only the quiet events that survived selection; the session's own
+    # timestamps are evidence and must not move.
+    quiet_ids = {id(event) for event in quiet}
+    chosen_noise = [event for event in chosen if id(event) in quiet_ids]
+    rebased = {id(event): moved for event, moved in zip(
+        chosen_noise, _rebase_noise(chosen_noise, bounds))}
+    chosen = [rebased.get(id(event), event) for event in chosen]
     mixed = required + [{**event, "label": "benign"} for event in chosen]
     mixed.sort(key=lambda event: event["ts"])
 
@@ -433,14 +530,18 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
         clean_events = [{**event, "label": "benign"} for event in clean_events]
         clean_truth = []
         side_effect_ids = []
-    return {
+    document = {
         "id": scenario_id(clean_events, clean_truth),
         "lang": lang,
         "events": clean_events,
         "truth": clean_truth,
         "side_effect_ids": side_effect_ids,
         "excluded": {"outside_session": outside, "untied_injector": len(dropped),
-                     "not_allowlisted": not_allowed},
+                     "not_allowlisted": not_allowed,
+                     "noise_injector": noise_injector,
+                     "noise_in_window": noise_in_window,
+                     "noise_not_allowlisted": noise_not_allowed},
         "teach": teach,
         "limits": LIMITS[lang],
     }
+    return document

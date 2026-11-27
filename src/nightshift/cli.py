@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument("--blind", action="store_true",
                             help="omit truth and attack labels for a blind-spot night")
 
+
     baseline_cmd = sub.add_parser("baseline",
                                   help="alerts per hour per rule, with no injections")
     baseline_cmd.add_argument("--state-dir", type=Path, default=default_state_dir())
@@ -384,6 +385,10 @@ def export_scenario(args) -> int:
     print(f"  excluded {excluded['outside_session']} event(s) outside this session, "
           f"{excluded['untied_injector']} untied injector line(s), "
           f"{excluded['not_allowlisted']} non-allowlisted background line(s)")
+    if args.noise:
+        print(f"  noise excluded {excluded['noise_injector']} injector line(s), "
+              f"{excluded['noise_in_window']} inside a truth window, "
+              f"{excluded['noise_not_allowlisted']} non-allowlisted line(s)")
     if args.blind:
         print("  blind: truth and attack labels omitted")
     print(f"  written to {args.out}")

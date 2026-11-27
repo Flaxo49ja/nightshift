@@ -10,8 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nightshift.scenario import (DOC_HOST, DOC_MAC, DOC_USER, Sanitizer,
-                                  allow_benign, export, scenario_id)
+from nightshift.scenario import (BACKGROUND_DESCRIPTIONS, DOC_HOST, DOC_MAC,
+                                  DOC_USER, Sanitizer, allow_benign, export,
+                                  scenario_id)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -380,15 +381,16 @@ class LevelSizeTest(unittest.TestCase):
     def test_background_is_filled_nearest_the_attacks_first(self):
         events, truth, required = self.required()
         noise = [
-            event(id="far", ts="2026-11-26T10:02:02.000000Z", event_type="auth_failure",
+            event(id="far", ts="2026-11-26T11:00:00.000000Z", event_type="auth_failure",
                   source="su", message="FAILED su for root by analyst"),
-            event(id="near", ts="2026-11-26T10:01:03.000000Z", event_type="auth_failure",
+            event(id="near", ts="2026-11-26T10:02:00.000000Z", event_type="auth_failure",
                   source="su", message="FAILED su for root by analyst"),
         ]
-        # e6 sits closest to the second run; the nearby noise line is next.
+        # e4 is closest to the runs; the nearby noise line is next. e6 is an
+        # injector-shaped session line and is now dropped by the allowlist.
         doc = export(events, truth, noise=noise, max_events=len(required) + 2)
         benign = [item["id"] for item in doc["events"] if item["label"] == "benign"]
-        self.assertEqual(sorted(benign), ["e6", "near"])
+        self.assertEqual(sorted(benign), ["e4", "near"])
         self.assertNotIn("far", {item["id"] for item in doc["events"]})
         times = [item["ts"] for item in doc["events"]]
         self.assertEqual(times, sorted(times))
@@ -399,12 +401,12 @@ class LevelSizeTest(unittest.TestCase):
                        event_type="auth_failure", source="su",
                        message="FAILED su for root by analyst")
                  for index in range(6)]
-        slots = len(required) + 4       # two in-window lines, then two ties
+        slots = len(required) + 3       # e4, then two ties from the quiet file
         first = export(events, truth, noise=noise, max_events=slots, seed=7)
         again = export(events, truth, noise=noise, max_events=slots, seed=7)
         self.assertEqual(first["events"], again["events"])
         chosen = [item["id"] for item in first["events"]
-                  if item["label"] == "benign" and item["id"] not in {"e4", "e6"}]
+                  if item["label"] == "benign" and item["id"] != "e4"]
         expected = sorted(noise, key=lambda item: hashlib.sha256(
             f"7:{item['id']}".encode()).hexdigest())[:2]
         self.assertEqual(sorted(chosen), sorted(item["id"] for item in expected))
@@ -446,8 +448,10 @@ class BlindScenarioTest(unittest.TestCase):
         noise = [event(id="n1", ts="2026-11-26T09:00:00.000000Z",
                        event_type="auth_success", source="sudo",
                        message="analyst opened a session")]
-        doc = export(events, truth, blind=True, noise=noise, max_events=3)
-        self.assertIn("e6", {item["id"] for item in doc["events"]})
+        doc = export(events, truth, blind=True, noise=noise, max_events=6)
+        ids = {item["id"] for item in doc["events"]}
+        self.assertIn("e5", ids)
+        self.assertNotIn("n1", ids)
 
     def test_blind_keeps_the_teaching_block(self):
         events, truth = playable()
@@ -492,3 +496,83 @@ class FixtureIdentifierTest(unittest.TestCase):
             for identifier in identifiers:
                 self.assertNotIn(identifier, text,
                                  f"{path.name} leaks a real identifier: {identifier}")
+
+
+
+class NoiseWindowTest(unittest.TestCase):
+    """Noise is background, not a second timeline: put it in this session."""
+
+    def test_noise_timestamps_are_rebased_inside_the_session(self):
+        events, truth = playable()
+        noise = [event(id="old1", ts="2020-01-01T00:00:00.000000Z",
+                       event_type="auth_failure", source="su",
+                       message="FAILED su for root by analyst"),
+                 event(id="old2", ts="2020-01-01T00:00:10.000000Z",
+                       event_type="auth_failure", source="su",
+                       message="FAILED su for root by analyst"),
+                 event(id="old3", ts="2020-01-01T00:00:20.000000Z",
+                       event_type="auth_failure", source="su",
+                       message="FAILED su for root by analyst")]
+        doc = export(events, truth, noise=noise, max_events=len(events) + len(noise))
+        times = [item["ts"] for item in doc["events"]]
+        self.assertEqual(times, sorted(times))
+        start = min(item["ts"] for item in doc["events"])
+        end = max(item["ts"] for item in doc["events"])
+        from datetime import datetime
+        parse = lambda value: datetime.fromisoformat(value.replace("Z", "+00:00"))
+        self.assertLessEqual((parse(end) - parse(start)).total_seconds(), 30 * 60)
+        rebased = [item for item in doc["events"] if item["id"].startswith("old")]
+        self.assertEqual([item["id"] for item in rebased], ["old1", "old2", "old3"])
+        session_start = datetime.fromisoformat(truth[0]["started"].replace("Z", "+00:00"))
+        session_end = datetime.fromisoformat(truth[-1]["ended"].replace("Z", "+00:00"))
+        from datetime import timedelta
+        lower = session_start - timedelta(seconds=60)
+        upper = session_end + timedelta(seconds=60)
+        for item in rebased:
+            self.assertTrue(lower <= parse(item["ts"]) <= upper, item["ts"])
+
+    def test_the_limits_say_which_timestamps_are_real(self):
+        events, truth = playable()
+        doc = export(events, truth, noise=[event(id="n1", ts="2020-01-01T00:00:00Z",
+                                                  event_type="auth_failure", source="su",
+                                                  message="FAILED su for root by analyst")])
+        text = " ".join(doc["limits"]).lower()
+        self.assertIn("background timestamps rebased", text)
+        self.assertIn("attack and side-effect timestamps are real", text)
+
+
+class NoiseRulesTest(unittest.TestCase):
+    def test_a_quiet_corpus_gets_the_same_drops_as_the_session(self):
+        events, truth = playable()
+        noise = [
+            event(id="noise-old-injector", ts="2020-01-01T00:00:00Z",
+                  message="Started [systemd-run] /usr/sbin/true."),
+            event(id="noise-in-window", ts="2026-11-26T10:00:00.500000Z",
+                  event_type="auth_failure", source="su",
+                  message="FAILED su for root by analyst"),
+            event(id="noise-kept", ts="2020-01-01T00:00:02Z",
+                  event_type="auth_failure", source="su",
+                  message="FAILED su for root by analyst"),
+        ]
+        doc = export(events, truth, noise=noise, max_events=len(events) + 3)
+        ids = {item["id"] for item in doc["events"]}
+        self.assertNotIn("noise-old-injector", ids)
+        self.assertNotIn("noise-in-window", ids)
+        self.assertIn("noise-kept", ids)
+        self.assertEqual(doc["excluded"]["noise_injector"], 1)
+        self.assertEqual(doc["excluded"]["noise_in_window"], 1)
+
+
+class BackgroundDescriptionTest(unittest.TestCase):
+    def test_only_the_fixed_generic_descriptions_are_kept(self):
+        self.assertIn("user preferences database", BACKGROUND_DESCRIPTIONS)
+        for message in ("Started User preferences database.",
+                        "Started backup-sync.timer.",
+                        "Stopped target Sleep."):
+            self.assertTrue(allow_benign(event(message=message)), message)
+        for message in ("Started Mission Center.",
+                        "Started app-md.obsidian.Obsidian-249335.scope.",
+                        "Started dbus-:1.1-org.kde.kwalletd6@0.service.",
+                        "Started Konsole - Terminal."):
+            self.assertFalse(allow_benign(event(message=message)), message)
+

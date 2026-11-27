@@ -36,7 +36,7 @@ class MatrixTest(unittest.TestCase):
         self.assertEqual(grid["T1105"]["auditd"], "observed")
 
     def test_blind_spots_are_sorted(self):
-        self.assertEqual(blind_spots("journald"), ["T1046", "T1105"])
+        self.assertEqual(blind_spots("journald"), ["T1046", "T1105", "T1543.002"])
 
 
 if __name__ == "__main__":
