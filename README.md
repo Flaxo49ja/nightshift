@@ -84,7 +84,9 @@ An export is one JSON file with the events, the answer key and the teaching
 text: [docs/scenario-format.md](docs/scenario-format.md), sample in
 [`examples/`](examples/). Each event is labelled `attack_evidence`,
 `side_effect` (the injector's own reloads) or `benign`, injector names are
-renamed to fixed aliases, and `--noise` can mix in a quiet day. Hostnames,
+renamed to fixed aliases, and `--noise` can mix in a quiet day. `--blind` omits
+the answer key and attack labels for a blind-spot exercise where the correct
+answer is nothing visible. Hostnames,
 usernames, home paths and every IP are replaced before the file is written, and
 a test reads this machine's real identity to prove it.
 
