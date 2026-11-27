@@ -370,8 +370,13 @@ def _background_rank(event: dict, required: list[dict], seed: int):
 def export(events: list[dict], truth: list[dict], lang: str = "en",
            sanitizer: Sanitizer | None = None, detections=None,
            noise: list[dict] | None = None, rules=None,
-           max_events: int = 20, seed: int = 0) -> dict:
-    """Build the scenario document. Pure: same input, same id, no clock."""
+           max_events: int = 20, seed: int = 0, blind: bool = False) -> dict:
+    """Build the scenario document. Pure: same input, same id, no clock.
+
+    `blind` removes the answer key and every attack label, leaving a night where
+    the correct answer is what the log does not show. Use it for blind-spot
+    exercises, not for a normal scored scenario.
+    """
     if lang not in TEACH:
         raise ValueError(f"unknown language {lang!r} (choose from {', '.join(TEACH)})")
     cleaner = sanitizer or Sanitizer()
@@ -416,6 +421,12 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
     clean_truth = _rename(cleaner.document(records), mapping)
     teach = dict(TEACH[lang])
     teach["techniques"] = _teach_entries(records, rules)
+    if blind:
+        # The teaching block survives so the debrief can name the blind spot,
+        # but the scenario itself must not claim an event is an attack.
+        clean_events = [{**event, "label": "benign"} for event in clean_events]
+        clean_truth = []
+        side_effect_ids = []
     return {
         "id": scenario_id(clean_events, clean_truth),
         "lang": lang,

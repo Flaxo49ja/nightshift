@@ -135,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
                                  "always included (default 20)")
     export_cmd.add_argument("--seed", type=int, default=0,
                             help="breaks distance ties among background events (default 0)")
+    export_cmd.add_argument("--blind", action="store_true",
+                            help="omit truth and attack labels for a blind-spot night")
 
     baseline_cmd = sub.add_parser("baseline",
                                   help="alerts per hour per rule, with no injections")
@@ -370,7 +372,8 @@ def export_scenario(args) -> int:
     document = export_scenario_doc(events, truth, lang=args.lang,
                                    detections=detections, noise=noise,
                                    rules=load_rules(args.rules),
-                                   max_events=args.max_events, seed=args.seed)
+                                   max_events=args.max_events, seed=args.seed,
+                                   blind=args.blind)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")
@@ -381,6 +384,8 @@ def export_scenario(args) -> int:
     print(f"  excluded {excluded['outside_session']} event(s) outside this session, "
           f"{excluded['untied_injector']} untied injector line(s), "
           f"{excluded['not_allowlisted']} non-allowlisted background line(s)")
+    if args.blind:
+        print("  blind: truth and attack labels omitted")
     print(f"  written to {args.out}")
     return 0
 

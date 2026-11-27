@@ -432,6 +432,41 @@ class ExampleLeakSweepTest(unittest.TestCase):
             self.assertEqual(self.PCI.findall(text), [], path.name)
 
 
+class BlindScenarioTest(unittest.TestCase):
+    def test_blind_drops_the_answer_key_and_attack_labels(self):
+        events, truth = playable()
+        doc = export(events, truth, blind=True)
+        self.assertEqual(doc["truth"], [])
+        self.assertEqual(doc["side_effect_ids"], [])
+        self.assertTrue(doc["events"])
+        self.assertEqual({item["label"] for item in doc["events"]}, {"benign"})
+
+    def test_blind_keeps_the_teaching_block(self):
+        events, truth = playable()
+        doc = export(events, truth, blind=True)
+        techniques = {entry["technique"] for entry in doc["teach"]["techniques"]}
+        self.assertIn("T1053.006", techniques)
+        self.assertIn("T1543.002", techniques)
+
+    def test_the_cli_blind_flag_writes_no_truth(self):
+        from nightshift.cli import main
+
+        events, truth = playable()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "events.jsonl").write_text(
+                "".join(json.dumps(item) + "\n" for item in events))
+            (state / "truth.jsonl").write_text(
+                "".join(json.dumps(item) + "\n" for item in truth))
+            out = state / "blind.json"
+            code = main(["export-scenario", "--state-dir", str(state),
+                         "--out", str(out), "--blind"])
+            self.assertEqual(code, 0)
+            doc = json.loads(out.read_text())
+            self.assertEqual(doc["truth"], [])
+            self.assertEqual({item["label"] for item in doc["events"]}, {"benign"})
+
+
 class FixtureIdentifierTest(unittest.TestCase):
     def test_no_export_names_the_range(self):
         for path in sorted((ROOT / "examples").glob("*.json")):

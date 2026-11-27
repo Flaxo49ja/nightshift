@@ -8,12 +8,18 @@ exercise.
 nightshift export-scenario --state-dir ~/.local/share/nightshift \
                            --out my-scenario.json --lang en \
                            [--noise quiet-day/events.jsonl] \
-                           [--max-events 20] [--seed 0]
+                           [--max-events 20] [--seed 0] [--blind]
 ```
 
 `--lang` is `en` or `pt`; only `teach` and `limits` change with it. `--noise`
 mixes in events from a separate quiet collection, sanitized the same way and
 labelled benign.
+
+`--blind` writes a blind-spot night: `truth` is empty, every event is labelled
+`benign`, and `side_effect_ids` is empty. The teaching block still names the
+techniques (including T1543.002) so the debrief can explain what the log could
+not show. A player who sees no attack evidence should answer "Nothing visible";
+the scenario cannot be used to measure a detection that the provider never saw.
 
 A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-timer.json).
 
