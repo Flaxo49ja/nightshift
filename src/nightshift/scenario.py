@@ -406,12 +406,18 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
     not_allowed = len(benign) - len(allowed)
     quiet = [{**event, "label": "benign"} for event in (noise or [])
              if allow_benign(event)]
-    required = [event for event in labelled if event["label"] != "benign"]
+    if blind:
+        # There are no attack labels to protect, so keep the night's own
+        # allowlisted lines and fill the rest with quiet background.
+        required = allowed
+        candidates = quiet
+    else:
+        required = [event for event in labelled if event["label"] != "benign"]
+        candidates = allowed + quiet
     if max_events < len(required):
         raise ValueError(
             f"--max-events {max_events} is smaller than the {len(required)} "
-            "attack and side-effect events this session contains")
-    candidates = allowed + quiet
+            "required session events")
     slots = max_events - len(required)
     chosen = sorted(candidates, key=lambda event: _background_rank(event, required, seed))[:slots]
     mixed = required + [{**event, "label": "benign"} for event in chosen]

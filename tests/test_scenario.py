@@ -441,6 +441,14 @@ class BlindScenarioTest(unittest.TestCase):
         self.assertTrue(doc["events"])
         self.assertEqual({item["label"] for item in doc["events"]}, {"benign"})
 
+    def test_blind_keeps_the_session_events_ahead_of_noise(self):
+        events, truth = playable()
+        noise = [event(id="n1", ts="2026-11-26T09:00:00.000000Z",
+                       event_type="auth_success", source="sudo",
+                       message="analyst opened a session")]
+        doc = export(events, truth, blind=True, noise=noise, max_events=3)
+        self.assertIn("e6", {item["id"] for item in doc["events"]})
+
     def test_blind_keeps_the_teaching_block(self):
         events, truth = playable()
         doc = export(events, truth, blind=True)
