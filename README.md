@@ -336,7 +336,7 @@ hostname, username or address appears in them.
 python3 -m unittest discover -s tests -v
 ```
 
-179 tests, no network, no journal access, no system changes. They cover the
+The suite runs offline: no network, no journal access, no system changes. It covers the
 schema contract, cursor gaps, rule validation and burst windows, the triage
 queue, injector safety (loopback only, cleanup, blind file mode), the
 scorecard's honesty rules, and one end-to-end shift over the fixtures.
