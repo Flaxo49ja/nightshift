@@ -588,17 +588,20 @@ class TicketExportTest(unittest.TestCase):
 
     def test_a_ticket_is_sanitized_and_has_no_range_name(self):
         events, truth = playable()
+        host = socket.gethostname()
+        user = getpass.getuser()
+        home = str(Path.home())
         ticket = self.ticket(
-            title="nightshift on cachyos-x8664",
-            customer_story="anayo saw 10.1.2.3 at /home/anayo",
-            reported_by="anayo")
+            title=f"nightshift on {host}",
+            customer_story=f"{user} saw 10.1.2.3 at {home}",
+            reported_by=user)
         doc = export(events, truth, ticket=ticket)
         raw = json.dumps(doc["ticket"])
         self.assertNotIn("nightshift", raw.lower())
-        self.assertNotIn("cachyos-x8664", raw)
-        self.assertNotIn("anayo", raw)
+        self.assertNotIn(host, raw)
+        self.assertNotIn(user, raw)
         self.assertNotIn("10.1.2.3", raw)
-        self.assertNotIn("/home/anayo", raw)
+        self.assertNotIn(home, raw)
         self.assertIn("192.0.2.", raw)
         self.assertIn("backup-sync", raw)
         self.assertEqual(doc["ticket"]["expected_action"], "escalate")
@@ -617,6 +620,7 @@ class TicketExportTest(unittest.TestCase):
         from nightshift.cli import main
 
         events, truth = playable()
+        host = socket.gethostname()
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp)
             (state / "events.jsonl").write_text(
@@ -627,10 +631,10 @@ class TicketExportTest(unittest.TestCase):
             code = main(["export-scenario", "--state-dir", str(state),
                          "--out", str(out), "--ticket-title", "nightshift ticket",
                          "--severity", "medium", "--reported-by", "Ivo Petrov",
-                         "--story", "A service appeared on cachyos-x8664.",
+                         "--story", f"A service appeared on {host}.",
                          "--expected-action", "need_more_data"])
             self.assertEqual(code, 0)
             doc = json.loads(out.read_text())
             self.assertEqual(doc["ticket"]["expected_action"], "need_more_data")
             self.assertNotIn("nightshift", json.dumps(doc["ticket"]).lower())
-            self.assertNotIn("cachyos-x8664", json.dumps(doc["ticket"]))
+            self.assertNotIn(host, json.dumps(doc["ticket"]))
