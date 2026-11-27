@@ -42,6 +42,7 @@ OBSERVATION_GRACE = 5
 TECHNIQUES = {
     "T1548.003": "Sudo privilege enumeration (`sudo -n -l`)",
     "T1053.006": "User timer: transient (`systemd-run`) or a unit pair on disk",
+    "T1543.002": "User service persistence (enable, start, then remove)",
     "T1105": "Loopback ingress transfer (fetch from a local mock server)",
     "T1046": "Loopback service discovery (TCP connect sweep)",
 }
@@ -56,6 +57,7 @@ EXPECTED_EVENT_TYPES = {
     "T1110.001": {"auth_failure"},
     "T1548.003": {"sudo_command", "auth_failure"},
     "T1053.006": {"service_start", "timer_run"},
+    "T1543.002": {"service_start"},
     "T1105": {"process_exec"},
     "T1046": {"process_exec"},
 }
@@ -134,6 +136,55 @@ SERVICE_UNIT = "[Unit]\nDescription=nightshift simulated task\n\n[Service]\nType
 # which is the line the timer rule reads. The service keeps one so its start
 # is not mistaken for a description-less transient unit.
 TIMER_UNIT = "[Unit]\n\n[Timer]\nOnActiveSec=1\nUnit={name}.service\n"
+
+
+def inject_user_service(runner=_run, sleeper=time.sleep, unit_dir: Path | None = None) -> dict:
+    """T1543.002: install a real user service, arm it, then remove it.
+
+    `enable` writes only a symlink and `disable` writes nothing to the journal,
+    which is the blind spot this simulation exists to show. The unit file is
+    removed and the manager reloaded in `finally`, whatever happened above.
+    """
+    started = now()
+    directory = Path(unit_dir) if unit_dir else UNIT_DIR
+    name = f"nightshift-{secrets.token_hex(4)}.service"
+    service = directory / name
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        service.write_text(SERVICE_UNIT, encoding="utf-8")
+        runner(["systemctl", "--user", "daemon-reload"])
+        enabled = runner(["systemctl", "--user", "enable", name])
+        if enabled.returncode != 0:
+            reason = (enabled.stderr or enabled.stdout or "").strip()
+            return _record("T1543.002", "failed", started,
+                           reason or f"enable exit {enabled.returncode}",
+                           marker=name, variant="user-service")
+        proc = runner(["systemctl", "--user", "start", name])
+        if proc.returncode != 0:
+            reason = (proc.stderr or proc.stdout or "").strip()
+            return _record("T1543.002", "failed", started,
+                           reason or f"start exit {proc.returncode}",
+                           marker=name, variant="user-service")
+        sleeper(0.5)                    # let journald receive the start line
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _record("T1543.002", "skipped", started,
+                       f"{type(exc).__name__}: {exc}", marker=name,
+                       variant="user-service")
+    finally:
+        for argv in (["systemctl", "--user", "disable", name],
+                     ["systemctl", "--user", "stop", name],
+                     ["systemctl", "--user", "daemon-reload"]):
+            try:
+                runner(argv)
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        try:
+            service.unlink()
+        except FileNotFoundError:
+            pass
+    return _record("T1543.002", "ran", started, marker=name,
+                   variant="user-service",
+                   note="user service disabled, stopped and removed; daemon reloaded")
 
 
 def inject_timer_unit(runner=_run, sleeper=time.sleep, unit_dir: Path | None = None) -> dict:
@@ -241,6 +292,7 @@ INJECTORS = {
     "T1548.003": (inject_sudo_enumeration,),
     # Two variants of one technique, not two techniques.
     "T1053.006": (inject_timer, inject_timer_unit),
+    "T1543.002": (inject_user_service,),
     "T1105": (inject_ingress,),
     "T1046": (inject_discovery,),
 }
@@ -272,7 +324,11 @@ def evidence(record: dict, events: list[dict]) -> list[dict]:
             transient_line = (record.get("variant") == "transient"
                               and event.get("event_type") == "service_start"
                               and message.lower().startswith("started ["))
-            if not transient_line:
+            # A user service is logged by description, not by unit name.
+            described_service = (record.get("variant") == "user-service"
+                                 and event.get("event_type") == "service_start"
+                                 and "nightshift simulated task" in message.lower())
+            if not transient_line and not described_service:
                 continue
         owned.append(event)
     return owned

@@ -191,6 +191,7 @@ anything reads it.
 |---|---|---|
 | T1548.003 | `sudo -n -l` | nothing — no password, no state |
 | T1053.006 | transient `systemd-run --user` timer, then `reset-failed` | a unit that is removed again |
+| T1543.002 | write a user service, enable and start it, then disable/stop/delete and reload | a unit that is removed again |
 | T1105 | fetch one file from a loopback HTTP server | 127.0.0.1 only |
 | T1046 | TCP connect sweep of loopback ports 1–20 | 127.0.0.1 only |
 
@@ -301,6 +302,7 @@ rather than process execution.
 | T1110.001 Password Guessing | observed | unknown |
 | T1548.003 Sudo and Sudo Caching | observed | observed |
 | T1053.006 Systemd Timers | observed | observed |
+| T1543.002 User Service Persistence | **no telemetry** | unknown |
 | T1105 Ingress Tool Transfer | **no telemetry** | observed |
 | T1046 Network Service Discovery | **no telemetry** | observed |
 | T1136.001 Local Account Creation | observed | observed |
@@ -340,12 +342,14 @@ scorecard's honesty rules, and one end-to-end shift over the fixtures.
 - `/var/log/audit/audit.log` is root-only on a default install. Without sudo the
   auditd provider says so instead of reporting a clean zero; use `--file` with a
   fixture to work offline.
-- T1543.002 (user service persistence) is a blind spot, and was left one:
-  `systemctl --user enable` writes nothing, `disable` writes nothing, and the
-  start line is `Starting <description>...` with the unit recorded as the
-  manager scope. A rule for it would either key on the injector's own
-  description or fire on every user service on the machine. The real lines are
-  in `fixtures/user_service_persistence.jsonl` so the negative is testable.
+- T1543.002 (user service persistence) has a real injector and remains a blind
+  spot: `systemctl --user enable` writes nothing, `disable` writes nothing, and
+  the start line is `Starting nightshift simulated task...` with the unit
+  recorded as the manager scope. The injector measures that line (`observed: 1`)
+  but writes `visible_expected: false`; a rule for it would either key on the
+  injector's own description or fire on every user service on the machine. The
+  real lines are in `fixtures/user_service_persistence.jsonl` so the negative is
+  testable.
 - `sudo` events are only recorded when sudo actually reaches PAM. `sudo -n`
   failures, and `su` to a nonexistent user, are invisible — see above.
 - `_CMDLINE` is usually absent for services, so `cmdline` is often `null`

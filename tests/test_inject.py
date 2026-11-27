@@ -240,3 +240,63 @@ class ExpectationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UserServiceInjectionTest(unittest.TestCase):
+    """T1543.002 creates a real user service, then removes every trace of it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def inject_here(self, runner):
+        return inject.inject_user_service(runner, unit_dir=self.dir,
+                                          sleeper=lambda seconds: None)
+
+    def files(self):
+        return sorted(p.name for p in self.dir.glob("nightshift-*"))
+
+    def test_writes_enables_starts_and_removes_the_service(self):
+        runner = FakeRunner()
+        record = self.inject_here(runner)
+        self.assertEqual((record["technique"], record["status"]),
+                         ("T1543.002", "ran"))
+        self.assertFalse(record["visible_expected"])
+        self.assertEqual(record["variant"], "user-service")
+        self.assertTrue(record["marker"].endswith(".service"))
+        self.assertEqual(self.files(), [])
+        flat = [" ".join(call) for call in runner.calls]
+        self.assertTrue(any(" enable " in f" {call} " for call in flat))
+        self.assertTrue(any(" start " in f" {call} " for call in flat))
+        self.assertTrue(any(" disable " in f" {call} " for call in flat))
+        self.assertTrue(any(" stop " in f" {call} " for call in flat))
+        self.assertEqual(sum("daemon-reload" in call for call in flat), 2)
+
+    def test_the_unit_is_a_real_oneshot_user_service(self):
+        written = {}
+
+        def runner(argv, timeout=15):
+            for path in self.dir.glob("nightshift-*"):
+                written[path.suffix] = path.read_text()
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        self.inject_here(runner)
+        self.assertIn("Type=oneshot", written[".service"])
+        self.assertIn("ExecStart=/bin/true", written[".service"])
+        self.assertIn("Description=nightshift simulated task", written[".service"])
+
+    def test_a_failed_start_still_disables_and_deletes(self):
+        record = self.inject_here(FakeRunner(returncode=1))
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(self.files(), [])
+        self.assertTrue(record["reason"])
+
+    def test_missing_systemctl_is_a_skip_and_cleans_up(self):
+        record = self.inject_here(FakeRunner(raises=FileNotFoundError()))
+        self.assertEqual(record["status"], "skipped")
+        self.assertEqual(self.files(), [])
+
+    def test_the_technique_has_one_explicit_variant(self):
+        self.assertEqual(len(inject.INJECTORS["T1543.002"]), 1)
+        self.assertIn("T1543.002", inject.TECHNIQUES)

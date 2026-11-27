@@ -21,6 +21,9 @@ COVERAGE: dict[str, dict[str, str]] = {
     "T1110.001": {"journald": "observed"},
     "T1548.003": {"journald": "observed", "auditd": "observed"},
     "T1053.006": {"journald": "observed", "auditd": "observed"},
+    # Enable/disable are silent; the start line names the attacker's own
+    # description and records the manager scope. No generic rule can claim it.
+    "T1543.002": {"journald": "no-telemetry"},
     # The pair auditd exists for: journald sees service output, not execve.
     "T1105": {"journald": "no-telemetry", "auditd": "observed"},
     "T1046": {"journald": "no-telemetry", "auditd": "observed"},
