@@ -576,3 +576,61 @@ class BackgroundDescriptionTest(unittest.TestCase):
                         "Started Konsole - Terminal."):
             self.assertFalse(allow_benign(event(message=message)), message)
 
+
+class TicketExportTest(unittest.TestCase):
+    def ticket(self, **extra):
+        base = {"title": "Repeated reloads on ws-01", "severity": "high",
+                "reported_by": "Mara Voss",
+                "customer_story": "The console reloaded twice during handover.",
+                "expected_action": "escalate"}
+        base.update(extra)
+        return base
+
+    def test_a_ticket_is_sanitized_and_has_no_range_name(self):
+        events, truth = playable()
+        ticket = self.ticket(
+            title="nightshift on cachyos-x8664",
+            customer_story="anayo saw 10.1.2.3 at /home/anayo",
+            reported_by="anayo")
+        doc = export(events, truth, ticket=ticket)
+        raw = json.dumps(doc["ticket"])
+        self.assertNotIn("nightshift", raw.lower())
+        self.assertNotIn("cachyos-x8664", raw)
+        self.assertNotIn("anayo", raw)
+        self.assertNotIn("10.1.2.3", raw)
+        self.assertNotIn("/home/anayo", raw)
+        self.assertIn("192.0.2.", raw)
+        self.assertIn("backup-sync", raw)
+        self.assertEqual(doc["ticket"]["expected_action"], "escalate")
+
+    def test_expected_action_must_be_one_of_the_three(self):
+        events, truth = playable()
+        with self.assertRaises(ValueError):
+            export(events, truth, ticket=self.ticket(expected_action="ignore"))
+
+    def test_a_partial_ticket_is_an_error_not_a_half_ticket(self):
+        events, truth = playable()
+        with self.assertRaises(ValueError):
+            export(events, truth, ticket={"title": "Only a title"})
+
+    def test_the_cli_flags_build_the_ticket(self):
+        from nightshift.cli import main
+
+        events, truth = playable()
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "events.jsonl").write_text(
+                "".join(json.dumps(item) + "\n" for item in events))
+            (state / "truth.jsonl").write_text(
+                "".join(json.dumps(item) + "\n" for item in truth))
+            out = state / "ticketed.json"
+            code = main(["export-scenario", "--state-dir", str(state),
+                         "--out", str(out), "--ticket-title", "nightshift ticket",
+                         "--severity", "medium", "--reported-by", "Ivo Petrov",
+                         "--story", "A service appeared on cachyos-x8664.",
+                         "--expected-action", "need_more_data"])
+            self.assertEqual(code, 0)
+            doc = json.loads(out.read_text())
+            self.assertEqual(doc["ticket"]["expected_action"], "need_more_data")
+            self.assertNotIn("nightshift", json.dumps(doc["ticket"]).lower())
+            self.assertNotIn("cachyos-x8664", json.dumps(doc["ticket"]))

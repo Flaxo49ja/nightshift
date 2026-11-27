@@ -78,6 +78,10 @@ nightshift score                   # detections vs ground truth
 nightshift coverage                # ATT&CK visibility report
 nightshift baseline --hours 24     # alerts per hour per rule, no injections
 nightshift export-scenario --out scenario.json   # sanitized, scoreable exercise
+nightshift export-scenario --out scenario.json \
+  --ticket-title "Repeated reloads" --severity high \
+  --reported-by "Mara Voss" --story "The console reloaded twice." \
+  --expected-action escalate                       # ticket built by flags, not by hand
 ```
 
 An export is one JSON file with the events, the answer key and the teaching
@@ -91,7 +95,10 @@ comes from a closed list of generic descriptions, never arbitrary app or device
 names. `--blind` omits the answer key and attack labels for a blind-spot
 exercise where the correct answer is nothing visible. Hostnames,
 usernames, home paths and every IP are replaced before the file is written, and
-a test reads this machine's real identity to prove it.
+a test reads this machine's real identity to prove it. Ticket text is built with
+`--ticket-title`, `--severity`, `--reported-by`, `--story` and
+`--expected-action`; it runs through the same sanitizer, and `nightshift` never
+appears in it.
 
 See it work before you trust it: `nightshift demo` runs the whole loop —
 collect, scan, inject, collect, scan, score — in a throwaway `/tmp` state dir and

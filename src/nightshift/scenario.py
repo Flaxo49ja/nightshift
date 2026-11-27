@@ -61,6 +61,10 @@ DESCRIPTION_ALIAS = "backup sync"
 # simulated technique.
 SIDE_EFFECTS = ("reload requested", "reloading", "reloading finished")
 
+TICKET_FIELDS = ("title", "severity", "reported_by", "customer_story",
+                 "expected_action")
+TICKET_ACTIONS = frozenset({"close_benign", "escalate", "need_more_data"})
+RANGE_NAME = re.compile(r"nightshift", re.IGNORECASE)
 
 # How each technique looks in the journal, for the teaching block. Rule text
 # comes from the rule itself; this is the shape an analyst has to recognise.
@@ -400,6 +404,25 @@ def _teach_entries(truth: list[dict], rules) -> list[dict]:
     return entries
 
 
+def _clean_ticket(ticket: dict, cleaner: Sanitizer, mapping: dict[str, str]) -> dict:
+    """Validate the optional ticket, then run the same sanitizer over it."""
+    if not isinstance(ticket, dict):
+        raise ValueError("ticket must be an object")
+    missing = [field for field in TICKET_FIELDS
+               if not isinstance(ticket.get(field), str) or not ticket[field].strip()]
+    if missing:
+        raise ValueError(f"ticket is missing {', '.join(missing)}")
+    if ticket["expected_action"] not in TICKET_ACTIONS:
+        raise ValueError(
+            f"ticket expected_action must be one of {', '.join(sorted(TICKET_ACTIONS))}")
+    cleaned = _rename(cleaner.document({field: ticket[field] for field in TICKET_FIELDS}),
+                      mapping)
+    # The range's own name must never reach a player, including in prose.
+    for field in TICKET_FIELDS:
+        cleaned[field] = RANGE_NAME.sub("backup-sync", cleaned[field])
+    return cleaned
+
+
 def scenario_id(events: list[dict], truth: list[dict]) -> str:
     canonical = json.dumps({"events": events, "truth": truth}, sort_keys=True,
                            ensure_ascii=False)
@@ -444,7 +467,8 @@ def _background_rank(event: dict, required: list[dict], seed: int):
 def export(events: list[dict], truth: list[dict], lang: str = "en",
            sanitizer: Sanitizer | None = None, detections=None,
            noise: list[dict] | None = None, rules=None,
-           max_events: int = 20, seed: int = 0, blind: bool = False) -> dict:
+           max_events: int = 20, seed: int = 0, blind: bool = False,
+           ticket: dict | None = None) -> dict:
     """Build the scenario document. Pure: same input, same id, no clock.
 
     `blind` removes the answer key and every attack label, leaving a night where
@@ -522,6 +546,7 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
 
     clean_events = [_rename(cleaner.document(event), mapping) for event in mixed]
     clean_truth = _rename(cleaner.document(records), mapping)
+    clean_ticket = _clean_ticket(ticket, cleaner, mapping) if ticket is not None else None
     teach = dict(TEACH[lang])
     teach["techniques"] = _teach_entries(records, rules)
     if blind:
@@ -544,4 +569,6 @@ def export(events: list[dict], truth: list[dict], lang: str = "en",
         "teach": teach,
         "limits": LIMITS[lang],
     }
+    if clean_ticket is not None:
+        document["ticket"] = clean_ticket
     return document

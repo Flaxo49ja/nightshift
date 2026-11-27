@@ -8,7 +8,10 @@ exercise.
 nightshift export-scenario --state-dir ~/.local/share/nightshift \
                            --out my-scenario.json --lang en \
                            [--noise quiet-day/events.jsonl] \
-                           [--max-events 20] [--seed 0] [--blind]
+                           [--max-events 20] [--seed 0] [--blind] \
+                           [--ticket-title TEXT --severity low|medium|high|critical \
+                            --reported-by TEXT --story TEXT \
+                            --expected-action close_benign|escalate|need_more_data]
 ```
 
 `--lang` is `en` or `pt`; only `teach` and `limits` change with it. `--noise`
@@ -21,6 +24,10 @@ techniques (including T1543.002) so the debrief can explain what the log could
 not show. A player who sees no attack evidence should answer "Nothing visible";
 the scenario cannot be used to measure a detection that the provider never saw.
 
+All five ticket flags are required together. They write a `ticket` block instead
+of hand-editing the exported JSON; the same sanitizer runs over every ticket
+field, and the range's own name is replaced with `backup-sync` so
+`nightshift` cannot appear in it.
 
 A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-timer.json).
 
@@ -36,6 +43,7 @@ A worked sample lives at [`examples/scenario-timer.json`](../examples/scenario-t
 | `excluded` | object | `outside_session`, `untied_injector`, `not_allowlisted`, `noise_injector`, `noise_in_window` and `noise_not_allowlisted` counts: what was left out, and why. |
 | `teach` | object | `title`, `prompt`, `hints[]`, and `techniques[]` (see below). |
 | `limits` | array | What the scenario is not. |
+| `ticket` | object | Optional. `title`, `severity`, `reported_by`, `customer_story`, `expected_action`; all sanitized like event text. |
 
 `truth` is deliberately in the same file: a scenario that needs two files gets
 separated, and one without truth cannot be scored. It also means you should not

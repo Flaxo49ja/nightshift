@@ -137,7 +137,17 @@ def build_parser() -> argparse.ArgumentParser:
                             help="breaks distance ties among background events (default 0)")
     export_cmd.add_argument("--blind", action="store_true",
                             help="omit truth and attack labels for a blind-spot night")
-
+    export_cmd.add_argument("--ticket-title", default=None,
+                            help="ticket title; requires the other ticket flags")
+    export_cmd.add_argument("--severity", choices=("low", "medium", "high", "critical"),
+                            default=None, help="ticket severity")
+    export_cmd.add_argument("--reported-by", default=None,
+                            help="ticket reporter name")
+    export_cmd.add_argument("--story", default=None,
+                            help="ticket customer story")
+    export_cmd.add_argument("--expected-action",
+                            choices=("close_benign", "escalate", "need_more_data"),
+                            default=None, help="decision the ticket should receive")
 
     baseline_cmd = sub.add_parser("baseline",
                                   help="alerts per hour per rule, with no injections")
@@ -370,11 +380,24 @@ def export_scenario(args) -> int:
               file=sys.stderr)
     detections = read_jsonl(args.state_dir / "detections.jsonl")
     noise = read_jsonl(args.noise) if args.noise else []
+    ticket_values = {
+        "title": args.ticket_title,
+        "severity": args.severity,
+        "reported_by": args.reported_by,
+        "customer_story": args.story,
+        "expected_action": args.expected_action,
+    }
+    supplied = [name for name, value in ticket_values.items() if value is not None]
+    if supplied and len(supplied) != len(ticket_values):
+        missing = [name for name, value in ticket_values.items()
+                   if value is None and name not in supplied]
+        raise ValueError("ticket export needs all five flags; missing " + ", ".join(missing))
+    ticket = ticket_values if supplied else None
     document = export_scenario_doc(events, truth, lang=args.lang,
                                    detections=detections, noise=noise,
                                    rules=load_rules(args.rules),
                                    max_events=args.max_events, seed=args.seed,
-                                   blind=args.blind)
+                                   blind=args.blind, ticket=ticket)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8")
